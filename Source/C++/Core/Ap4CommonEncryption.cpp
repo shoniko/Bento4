@@ -935,12 +935,6 @@ AP4_CencEncryptingProcessor::Initialize(AP4_AtomParent&                  top_lev
                 ++pssh_position;
             }
         }
-        if (eme_pssh) {
-            moov->AddChild(eme_pssh, pssh_position);
-            if (pssh_position >= 0) {
-                ++pssh_position;
-            }
-        }
         for (unsigned int i=0; i<m_PsshAtoms.ItemCount(); i++) {
             if (m_PsshAtoms[i]) {
                 moov->AddChild(new AP4_PsshAtom(*m_PsshAtoms[i]), pssh_position);
@@ -949,6 +943,14 @@ AP4_CencEncryptingProcessor::Initialize(AP4_AtomParent&                  top_lev
                 ++pssh_position;
             }
         }
+        /*
+        if (eme_pssh) {
+            moov->AddChild(eme_pssh, pssh_position);
+            if (pssh_position >= 0) {
+                ++pssh_position;
+            }
+        }
+        */
     }
     
     

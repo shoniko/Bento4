@@ -156,7 +156,7 @@ def main():
     for i in range(options.bitrates):
         output_filename = 'video_%05d.mp4' % int(bitrates[i])
         temp_filename = output_filename+'_'
-        base_cmd  = 'ffmpeg -i "%s" -strict experimental -acodec libfdk_aac -ac 2 -ab %dk -profile:v baseline -preset slow -vcodec libx264' % (args[0], options.audio_bitrate)
+        base_cmd  = 'ffmpeg -i "%s" -strict experimental -acodec aac -ac 2 -ab %dk -profile:v baseline -preset slow -vcodec libx264' % (args[0], options.audio_bitrate)
         if options.text_overlay:
             base_cmd += ' -vf "drawtext=fontfile=/Library/Fonts/Courier New.ttf: text='+str(int(bitrates[i]))+'kbps '+str(resolutions[i][0])+'*'+str(resolutions[i][1])+': fontsize=50:  x=(w)/8: y=h-(2*lh): fontcolor=white:"'
         if options.select_streams:
@@ -173,7 +173,7 @@ def main():
             base_cmd += ' -profile:v '+options.video_profile
 
         #x264_opts = "-x264opts keyint=%d:min-keyint=%d:scenecut=0:rc-lookahead=%d" % (options.segment_size, options.segment_size, options.segment_size)
-        x264_opts = "-force_key_frames 'expr:eq(mod(n,%d),0)' -x264opts rc-lookahead=%d" % (options.segment_size, options.segment_size)
+        x264_opts = "-force_key_frames \"expr:eq(mod(n,%d),0)\" -x264opts rc-lookahead=%d" % (options.segment_size, options.segment_size)
         x264_opts += ':vbv-bufsize=%d:vbv-maxrate=%d' % (bitrates[i], int(bitrates[i]*1.5))
         cmd = base_cmd+' '+x264_opts+' -s '+str(resolutions[i][0])+'x'+str(resolutions[i][1])+' -f mp4 '+temp_filename
         if options.verbose:

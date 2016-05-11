@@ -19,9 +19,11 @@ import xml.etree.ElementTree as xml
 from xml.dom.minidom import parseString
 import tempfile
 from mp4utils import *
+import keyos
+import uuid
 
 # setup main options
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 SVN_REVISION = "$Revision: 575 $"
 SCRIPT_PATH = path.abspath(path.dirname(__file__))
 sys.path += [SCRIPT_PATH]
@@ -230,7 +232,7 @@ def OutputDash(options, audio_tracks, video_tracks):
                       minBufferTime="PT%.02fS" % options.min_buffer_time,
                       mediaPresentationDuration=XmlDuration(int(presentation_duration)),
                       type='static')
-    mpd.append(xml.Comment(' Created with Bento4 mp4-dash.py, VERSION=' + VERSION + '-' + SVN_REVISION[11:-1] + ' '))
+    mpd.append(xml.Comment(' Created with KeyOS DASHPack, VERSION=' + VERSION + '-' + SVN_REVISION[11:-1] + ' '))
     period = xml.SubElement(mpd, 'Period')
 
     # process the audio tracks
@@ -349,7 +351,7 @@ def OutputSmooth(options, audio_tracks, video_tracks):
                                   MinorVersion="0",
                                   TimeScale="10000000",
                                   Duration=str(int(presentation_duration*10000000.0)))
-    client_manifest.append(xml.Comment(' Created with Bento4 mp4-dash.py, VERSION='+VERSION+'-'+SVN_REVISION[11:-1]+' '))
+    client_manifest.append(xml.Comment(' Created with KeyOS DASHPAck, VERSION='+VERSION+'-'+SVN_REVISION[11:-1]+' '))
     
     # process the audio tracks
     for (language, audio_track) in audio_tracks.iteritems():
@@ -534,7 +536,7 @@ def SelectTracks(options, media_sources):
             continue
         
         # parse the file
-        print 'Parsing media file', str(file_list_index)+':', GetMappedFileName(media_file)
+        print "Parsing media file", str(file_list_index), GetMappedFileName(media_file)
         if not os.path.exists(media_file):
             PrintErrorAndExit('ERROR: media file ' + media_file + ' does not exist')
             
@@ -706,6 +708,8 @@ def main():
                            "(2) one or more <name>:<value> pair(s) (separated by '#' if more than one) specifying fields of a Widevine header (field names include 'provider' [string], 'content_id' [byte array in hex], 'policy' [string])")
     parser.add_option('', "--exec-dir", metavar="<exec_dir>", dest="exec_dir", default=path.join(SCRIPT_PATH, 'bin', platform),
                       help="Directory where the Bento4 executables are located")
+    parser.add_option('', "--keyos-user-key", dest="keyos_user_key", default=None, metavar="<keyos_user_key>",
+                      help="User Key given by BuyDRM for KMS integration")
     (options, args) = parser.parse_args()
     if len(args) == 0:
         parser.print_help()
@@ -773,6 +777,17 @@ def main():
 
     if options.verbose:
         print 'Profiles:', ','.join(options.profiles)
+
+    if options.keyos_user_key:
+        options.widevine_header = "provider:buydrmkeyos"
+        options.encryption_key, options.playready_header, content_id = keyos.GetKeyosKey(options.keyos_user_key)
+        options.widevine = True
+        options.widevine_header = options.widevine_header + "#content_id:" + content_id
+        if options.playready_header == "":
+            raise Exception('Failed to acquire keyos content key. Error: ' + options.encryption_key)
+#        options.playready_header = "#" + options.playready_header.encode('base64')
+        #Alernatively Bento can generate the header too, just give it the LA_URL
+        options.playready_header = "LA_URL:http://sldrm.licensekeyserver.net/core/rightsmanager.asmx"
 
     if options.playready_header or options.playready_add_pssh:
         options.playready = True
@@ -919,8 +934,8 @@ def main():
     (audio_tracks, video_tracks, mp4_files) = SelectTracks(options, media_sources)
 
     # check that we have at least one audio and one video
-    if not audio_tracks:
-        PrintErrorAndExit('ERROR: no audio track selected')
+    #if not audio_tracks:
+        #PrintErrorAndExit('ERROR: no audio track selected')
     #if not video_tracks:
     #    PrintErrorAndExit('ERROR: no video track selected')
         

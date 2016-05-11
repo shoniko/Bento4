@@ -18,7 +18,7 @@ try:
         VSBINDIR = environ['VISUALSTUDIO_BIN']
 except NameError:
     # Use default value for visual studio.
-    VSBINDIR = 'C:/Program Files/Microsoft Visual Studio 8/Common7/IDE'
+    VSBINDIR = 'C:/Program Files (x86)/Microsoft Visual Studio 12.0/Common7/IDE'
     print 'VISUALSTUDIO_BIN not set. Trying default value:'
     print '    ' + VSBINDIR
     print ''

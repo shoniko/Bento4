@@ -26,6 +26,10 @@ import json
 import sys
 from xml.etree import ElementTree
 from subprocess import check_output, CalledProcessError
+from mp4utils import *
+import tempfile
+import keyos
+
 
 # constants
 DASH_NS_URN_COMPAT = 'urn:mpeg:DASH:schema:MPD:2011'
@@ -34,6 +38,13 @@ DASH_NS_COMPAT     = '{'+DASH_NS_URN_COMPAT+'}'
 DASH_NS            = '{'+DASH_NS_URN+'}'
 MARLIN_MAS_NS_URN  = 'urn:marlin:mas:1-0:services:schemas:mpd'
 MARLIN_MAS_NS      = '{'+MARLIN_MAS_NS_URN+'}'
+PLAYREADY_PSSH_SYSTEM_ID  = '9a04f07998404286ab92e65be0885f95'
+PLAYREADY_SCHEME_ID_URI   = 'urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95'
+PLAYREADY_MSPR_NAMESPACE  = 'urn:microsoft:playready'
+WIDEVINE_PSSH_SYSTEM_ID   = 'edef8ba979d64acea3c827dcd51d21ed'
+WIDEVINE_SCHEME_ID_URI    = 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
+
+TempFiles = []
 
 def Bento4Command(name, *args, **kwargs):
     cmd = [os.path.join(Options.exec_dir, name)]
@@ -355,14 +366,33 @@ class Cloner:
                     self.init_filename = outfile_name
 
                 #shutil.copyfile(outfile_name, outfile_name_final)
+                kid_hex = Options.kid.encode('hex')
+                key_hex = Options.key.encode('hex')
+
                 args = ["--method", "MPEG-CENC"]
                 for t in self.track_ids:
                     args.append("--property")
-                    args.append(str(t)+":KID:"+Options.kid.encode('hex'))
+                    args.append(str(t)+":KID:"+kid_hex)
                 for t in self.track_ids:
                     args.append("--key")
-                    args.append(str(t)+":"+Options.key.encode('hex')+':random')
+                    args.append(str(t)+":"+key_hex+':random')
                 args += [outfile_name, outfile_name_final]
+
+                playready_header = ComputePlayReadyHeader("LA_URL:http://sldrm.licensekeyserver.com/core/rightsmanager.asmx", kid_hex, key_hex)
+                pssh_file = tempfile.NamedTemporaryFile(dir = self.root_dir, delete=False)
+                pssh_file.write(playready_header)
+                TempFiles.append(pssh_file.name)
+                pssh_file.close() # necessary on Windows
+                args += ['--pssh', PLAYREADY_PSSH_SYSTEM_ID+':'+pssh_file.name]
+                
+                widevine_header = "provider:buydrmkeyos" + "#content_id:" + Options.content_id
+                widevine_header = ComputeWidevineHeader(widevine_header, kid_hex, key_hex)
+                pssh_file = tempfile.NamedTemporaryFile(dir = self.root_dir, delete=False)
+                pssh_file.write(widevine_header)
+                TempFiles.append(pssh_file.name)
+                pssh_file.close() # necessary on Windows
+                args += ['--pssh', WIDEVINE_PSSH_SYSTEM_ID+':'+pssh_file.name]
+
 
                 if not is_init:
                     args += ["--fragments-info", self.init_filename]
@@ -397,6 +427,9 @@ def main():
     parser.add_option('', "--exec-dir", metavar="<exec_dir>",
                       dest="exec_dir", default=os.path.join(SCRIPT_PATH, 'bin', platform),
                       help="Directory where the Bento4 executables are located")    
+    parser.add_option('', "--keyos-user-key", metavar="<keyos_user_key>",
+                      dest="keyos_user_key", default=None,
+                      help="UserKey from KeyOS Console (BuyDRM)")    
                       
     global Options
     (Options, args) = parser.parse_args()
@@ -413,6 +446,15 @@ def main():
         Options.kid = Options.encrypt[:32].decode('hex')
         Options.key = Options.encrypt[33:].decode('hex') 
         
+    if Options.keyos_user_key == None:
+        raise Exception('KeyOS UserKey is required')
+
+    encryption_key, playready_header, content_id = keyos.GetKeyosKey(Options.keyos_user_key)  
+    Options.encrypt = encryption_key;
+    Options.kid = Options.encrypt[:32].decode('hex')
+    Options.key = Options.encrypt[33:].decode('hex') 
+    Options.content_id = content_id 
+
     # create the output dir
     MakeNewDir(output_dir, True)
     
@@ -430,6 +472,7 @@ def main():
         
     ElementTree.register_namespace('', DASH_NS_URN)
     ElementTree.register_namespace('mas', MARLIN_MAS_NS_URN)
+    ElementTree.register_namespace('mspr', PLAYREADY_MSPR_NAMESPACE)
 
     cloner = Cloner(output_dir)
     for period in mpd.periods:
@@ -464,12 +507,30 @@ def main():
     if Options.encrypt:
         for p in mpd.xml.findall(DASH_NS+'Period'):
             for s in p.findall(DASH_NS+'AdaptationSet'):
+                #Widevine
+                cp = ElementTree.Element(DASH_NS+'ContentProtection', schemeIdUri=WIDEVINE_SCHEME_ID_URI)
+                cp.tail = s.tail
+                s.insert(0, cp)
+
+                #Marlin
                 cp = ElementTree.Element(DASH_NS+'ContentProtection', schemeIdUri='urn:uuid:5E629AF5-38DA-4063-8977-97FFBD9902D4')
                 cp.tail = s.tail
                 cids = ElementTree.SubElement(cp, MARLIN_MAS_NS+'MarlinContentIds')
                 cid = ElementTree.SubElement(cids, MARLIN_MAS_NS+'MarlinContentId')
                 cid.text = 'urn:marlin:kid:'+Options.kid.encode('hex')
                 s.insert(0, cp)
+
+                #Playready
+                kid_hex = Options.kid.encode('hex')
+                key_hex = Options.key.encode('hex')
+                cp = ElementTree.Element(DASH_NS+'ContentProtection', schemeIdUri=PLAYREADY_SCHEME_ID_URI)
+                cp.tail = s.tail
+                header_bin = ComputePlayReadyHeader("LA_URL:http://sldrm.licensekeyserver.com/core/rightsmanager.asmx", kid_hex, key_hex)
+                header_b64 = header_bin.encode('base64').replace('\n', '')
+                pro = ElementTree.SubElement(cp, '{' + PLAYREADY_MSPR_NAMESPACE + '}pro')
+                pro.text = header_b64
+                s.insert(0, cp)
+
                 
     # write the MPD    
     xml_tree = ElementTree.ElementTree(mpd.xml)
@@ -478,5 +539,9 @@ def main():
 ###########################    
 SCRIPT_PATH = os.path.abspath(os.path.dirname(__file__))
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    finally:
+        for f in TempFiles:
+            os.unlink(f)
     

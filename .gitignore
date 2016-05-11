@@ -5,3 +5,17 @@ Source/Python/utils/bin/macosx/mp4encrypt
 Source/Python/utils/bin/macosx/mp4fragment
 Source/Python/utils/bin/macosx/mp4info
 Source/Python/utils/bin/macosx/mp4split
+SDKTest
+SDK/Bento4-SDK-1-4-2-579.x86-microsoft-win32-vs2012
+SDK/Bento4-SDK-1-4-2-579.x86-microsoft-win32-vs2010
+Build/Targets
+  
+*.obj
+*.pdb
+*.exe
+*.ilk
+*.dll
+*.tlog
+*.lastbuildstate
+*.idb
+*.log
