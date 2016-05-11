@@ -2,7 +2,7 @@
 |
 |    AP4 - MP4 File Info
 |
-|    Copyright 2002-2008 Axiomatic Systems, LLC
+|    Copyright 2002-2015 Axiomatic Systems, LLC
 |
 |
 |    This file is part of Bento4/AP4 (MP4 Atom Processing Library).
@@ -40,9 +40,9 @@
 /*----------------------------------------------------------------------
 |   constants
 +---------------------------------------------------------------------*/
-#define BANNER "MP4 File Info - Version 1.3.2\n"\
+#define BANNER "MP4 File Info - Version 1.3.3\n"\
                "(Bento4 Version " AP4_VERSION_STRING ")\n"\
-               "(c) 2002-2010 Axiomatic Systems, LLC"
+               "(c) 2002-2015 Axiomatic Systems, LLC"
  
 /*----------------------------------------------------------------------
 |   globals
@@ -281,7 +281,7 @@ ShowProtectedSampleDescription_Json(AP4_ProtectedSampleDescription& desc, bool v
             ShowProtectionSchemeInfo_Json(desc.GetSchemeType(), *schi, verbose);
         }
     }
-    printf("},\n");
+    printf("}");
 }
 
 /*----------------------------------------------------------------------
@@ -293,12 +293,17 @@ ShowMpegAudioSampleDescription(AP4_MpegAudioSampleDescription& mpeg_audio_desc)
     AP4_MpegAudioSampleDescription::Mpeg4AudioObjectType object_type = 
         mpeg_audio_desc.GetMpeg4AudioObjectType();
     const char* object_type_string = AP4_MpegAudioSampleDescription::GetMpeg4AudioObjectTypeString(object_type);
+    AP4_String codec_string;
+    mpeg_audio_desc.GetCodecString(codec_string);
+    
     switch (Options.format) {
         case TEXT_FORMAT:
+            printf("    Codecs String: %s\n", codec_string.GetChars());
             printf("    MPEG-4 Audio Object Type: %d (%s)\n", object_type, object_type_string);
             break;
 
         case JSON_FORMAT:
+            printf("\"codecs_string\": \"%s\",\n", codec_string.GetChars());
             printf("\"mpeg_4_audio_object_type\":%d,\n",          object_type);
             printf("\"mpeg_4_audio_object_type_name\":\"%s\"", object_type_string);
             break;
@@ -338,7 +343,8 @@ ShowMpegAudioSampleDescription(AP4_MpegAudioSampleDescription& mpeg_audio_desc)
 
                         printf(",\n");
                         printf("  \"extension\":{\n");
-                        printf("    \"object_type\":\"%s\",\n", object_type_string);
+                        printf("    \"object_type\":%d,\n", dec_config.m_Extension.m_ObjectType);
+                        printf("    \"object_type_name\":\"%s\",\n", object_type_string);
                         printf("    \"sbr_present\":%s,\n", dec_config.m_Extension.m_SbrPresent?"true":"false");
                         printf("    \"ps_present\":%s,\n",   dec_config.m_Extension.m_PsPresent?"true":"false");
                         printf("    \"sampling_frequency\":%d\n", dec_config.m_Extension.m_SamplingFrequency);
@@ -415,7 +421,7 @@ ShowSampleDescription_Text(AP4_SampleDescription& description, bool verbose)
         printf("    Depth:       %d\n", video_desc->GetDepth());
     }
 
-    // Dolby specifics
+    // Dolby Digital specifics
     if (desc->GetFormat() == AP4_SAMPLE_FORMAT_EC_3) {
         AP4_Dec3Atom* dec3 = AP4_DYNAMIC_CAST(AP4_Dec3Atom, desc->GetDetails().GetChild(AP4_ATOM_TYPE('d', 'e', 'c', '3')));
         if (dec3) {
@@ -430,6 +436,9 @@ ShowSampleDescription_Text(AP4_SampleDescription& description, bool verbose)
                 printf("        num_dep_sub = %d\n", dec3->GetSubStreams()[i].num_dep_sub);
                 printf("        chan_loc    = %d\n", dec3->GetSubStreams()[i].chan_loc);
             }
+            printf("    AC3 dec3 payload: [");
+            ShowData(dec3->GetRawBytes());
+            printf("]\n");
         }
     }
     
@@ -463,10 +472,16 @@ ShowSampleDescription_Text(AP4_SampleDescription& description, bool verbose)
             sep = ", ";
         }
         printf("]\n");
+        printf("    Codecs String: ");
+        AP4_String codec;
+        avc_desc->GetCodecString(codec);
+        printf("%s", codec.GetChars());
+        printf("\n");
     } else if (desc->GetType() == AP4_SampleDescription::TYPE_HEVC) {
         // HEVC Sample Description
         AP4_HevcSampleDescription* hevc_desc = AP4_DYNAMIC_CAST(AP4_HevcSampleDescription, desc);
         const char* profile_name = AP4_HvccAtom::GetProfileName(hevc_desc->GetGeneralProfileSpace(), hevc_desc->GetGeneralProfile());
+        printf("    HEVC Profile Space:       %d\n", hevc_desc->GetGeneralProfileSpace());
         printf("    HEVC Profile:             %d", hevc_desc->GetGeneralProfile());
         if (profile_name) printf(" (%s)", profile_name);
         printf("\n");
@@ -488,7 +503,7 @@ ShowSampleDescription_Text(AP4_SampleDescription& description, bool verbose)
             printf("      {\n");
             printf("        Array Completeness=%d\n", seq.m_ArrayCompleteness);
             printf("        Type=%d", seq.m_NaluType);
-            const char* nalu_type_name = AP4_HevcParser::NaluTypeName(seq.m_NaluType);
+            const char* nalu_type_name = AP4_HevcNalParser::NaluTypeName(seq.m_NaluType);
             if (nalu_type_name) {
                 printf(" (%s)", nalu_type_name);
             }
@@ -499,8 +514,29 @@ ShowSampleDescription_Text(AP4_SampleDescription& description, bool verbose)
             }
             printf("\n      }\n");
         }
+        printf("    Codecs String: ");
+        AP4_String codec;
+        hevc_desc->GetCodecString(codec);
+        printf("%s", codec.GetChars());
+        printf("\n");
     }
 
+    // Dolby Vision specifics
+    AP4_DvccAtom* dvcc = AP4_DYNAMIC_CAST(AP4_DvccAtom, desc->GetDetails().GetChild(AP4_ATOM_TYPE_DVCC));
+    if (dvcc) {
+        printf("    Dolby Vision:\n");
+        printf("      Version:     %d.%d\n", dvcc->GetDvVersionMajor(), dvcc->GetDvVersionMinor());
+        const char* profile_name = AP4_DvccAtom::GetProfileName(dvcc->GetDvProfile());
+        if (profile_name) {
+            printf("      Profile:     %s\n", profile_name);
+        } else {
+            printf("      Profile:     %d\n", dvcc->GetDvProfile());
+        }
+        printf("      Level:       %d\n", dvcc->GetDvLevel());
+        printf("      RPU Present: %s\n", dvcc->GetRpuPresentFlag()?"true":"false");
+        printf("      EL Present:  %s\n", dvcc->GetElPresentFlag()?"true":"false");
+        printf("      BL Present:  %s\n", dvcc->GetBlPresentFlag()?"true":"false");
+    }
     
     // Subtitles
     if (desc->GetType() == AP4_SampleDescription::TYPE_SUBTITLES) {
@@ -522,7 +558,10 @@ ShowSampleDescription_Json(AP4_SampleDescription& description, bool verbose)
     AP4_SampleDescription* desc = &description;
     if (desc->GetType() == AP4_SampleDescription::TYPE_PROTECTED) {
         AP4_ProtectedSampleDescription* prot_desc = AP4_DYNAMIC_CAST(AP4_ProtectedSampleDescription, desc);
-        if (prot_desc) ShowProtectedSampleDescription_Json(*prot_desc, verbose);
+        if (prot_desc) {
+            ShowProtectedSampleDescription_Json(*prot_desc, verbose);
+            printf(",\n");
+        }
         desc = prot_desc->GetOriginalSampleDescription();
     }
     char coding[5];
@@ -579,6 +618,34 @@ ShowSampleDescription_Json(AP4_SampleDescription& description, bool verbose)
         printf("\"depth\":%d",     video_desc->GetDepth());
     }
 
+    // Dolby Digital specifics
+    if (desc->GetFormat() == AP4_SAMPLE_FORMAT_EC_3) {
+        AP4_Dec3Atom* dec3 = AP4_DYNAMIC_CAST(AP4_Dec3Atom, desc->GetDetails().GetChild(AP4_ATOM_TYPE('d', 'e', 'c', '3')));
+        if (dec3) {
+            printf(",\n");
+            printf("\"dolby_digital_info\": {\n");
+            printf("  \"dec3_payload\": \"");
+            ShowData(dec3->GetRawBytes());
+            printf("\",\n");
+            printf("  \"data_rate\": %d,\n", dec3->GetDataRate());
+            printf("  \"substreams\": [\n");
+            const char* sep = "";
+            for (unsigned int i=0; i<dec3->GetSubStreams().ItemCount(); i++) {
+                printf("%s    {\n", sep);
+                printf("      \"fscod\": %d,\n", dec3->GetSubStreams()[i].fscod);
+                printf("      \"bsid\": %d,\n",  dec3->GetSubStreams()[i].bsid);
+                printf("      \"bsmod\": %d,\n", dec3->GetSubStreams()[i].bsmod);
+                printf("      \"acmod\": %d,\n", dec3->GetSubStreams()[i].acmod);
+                printf("      \"lfeon\": %d,\n", dec3->GetSubStreams()[i].lfeon);
+                printf("      \"num_dep_sub\": %d,\n", dec3->GetSubStreams()[i].num_dep_sub);
+                printf("      \"chan_loc\": %d\n", dec3->GetSubStreams()[i].chan_loc);
+                printf("    }");
+                sep = ",\n";
+            }
+            printf("\n  ]\n}");
+        }
+    }
+
     // AVC specifics
     if (desc->GetType() == AP4_SampleDescription::TYPE_AVC) {
         // AVC Sample Description
@@ -609,7 +676,90 @@ ShowSampleDescription_Json(AP4_SampleDescription& description, bool verbose)
             printf("\"");
             sep = ", ";
         }
-        printf("]");
+        printf("],\n");
+        printf("\"codecs_string\":\"");
+        AP4_String codec;
+        avc_desc->GetCodecString(codec);
+        printf("%s", codec.GetChars());
+        printf("\"");
+    } else if (desc->GetType() == AP4_SampleDescription::TYPE_HEVC) {
+        // HEVC Sample Description
+        AP4_HevcSampleDescription* hevc_desc = AP4_DYNAMIC_CAST(AP4_HevcSampleDescription, desc);
+        printf(",\n");
+        printf("\"hevc_profile_space\":%d,\n", hevc_desc->GetGeneralProfileSpace());
+        printf("\"hevc_profile\":%d,\n", hevc_desc->GetGeneralProfile());
+        const char* profile_name = AP4_HvccAtom::GetProfileName(hevc_desc->GetGeneralProfileSpace(), hevc_desc->GetGeneralProfile());
+        if (profile_name) printf("\"hevc_profile_name\":\"%s\",\n", profile_name);
+        printf("\"hevc_profile_compat\":%d,\n", hevc_desc->GetGeneralProfileCompatibilityFlags());
+        printf("\"hevc_constraints\":%llu,\n", hevc_desc->GetGeneralConstraintIndicatorFlags());
+        printf("\"hevc_level\":%d,\n", hevc_desc->GetGeneralLevel());
+        printf("\"hevc_level_name\":\"%d.%d\",\n", hevc_desc->GetGeneralLevel()/30, (hevc_desc->GetGeneralLevel()%30)/3);
+        printf("\"hevc_tier\":%d,\n", hevc_desc->GetGeneralTierFlag());
+        printf("\"hevc_chroma_format\":%d,\n", hevc_desc->GetChromaFormat());
+        const char* chroma_format_name = AP4_HvccAtom::GetChromaFormatName(hevc_desc->GetChromaFormat());
+        if (chroma_format_name) printf("\"hevc_chroma_format_name\":\"%s\",\n", chroma_format_name);
+        printf("\"hevc_chroma_bit_depth\":%d,\n", hevc_desc->GetChromaBitDepth());
+        printf("\"hevc_lunma_bit_depth\":%d,\n", hevc_desc->GetLumaBitDepth());
+        printf("\"hevc_average_frame_rate\":%d,\n", hevc_desc->GetAverageFrameRate());
+        printf("\"hevc_constant_frame_rate\":%d,\n", hevc_desc->GetConstantFrameRate());
+        printf("\"hevc_nalu_length_size\":%d,\n", hevc_desc->GetNaluLengthSize());
+        printf("\"hevc_sequences\": [\n");
+        const char* seq_sep = "";
+        for (unsigned int i=0; i<hevc_desc->GetSequences().ItemCount(); i++) {
+            const AP4_HvccAtom::Sequence& seq = hevc_desc->GetSequences()[i];
+            printf("%s      {\n", seq_sep);
+            printf("        \"array_completeness\":%d,\n", seq.m_ArrayCompleteness);
+            printf("        \"type\":%d,\n", seq.m_NaluType);
+            const char* nalu_type_name = AP4_HevcNalParser::NaluTypeName(seq.m_NaluType);
+            if (nalu_type_name) {
+                printf("        \"type_name\":\"%s\",\n", nalu_type_name);
+            }
+            printf("        \"data\":[");
+            const char* sep = "";
+            for (unsigned int j=0; j<seq.m_Nalus.ItemCount(); j++) {
+                printf("%s", sep);
+                printf("\"");
+                ShowData(seq.m_Nalus[j]);
+                printf("\"");
+                sep = ", ";
+            }
+            printf("]\n      }");
+            seq_sep = ",\n";
+        }
+        printf("\n],\n");
+        printf("\"codecs_string\":\"");
+        AP4_String codec;
+        hevc_desc->GetCodecString(codec);
+        printf("%s", codec.GetChars());
+        printf("\"");
+    }
+
+    // Dolby Vision specifics
+    AP4_DvccAtom* dvcc = AP4_DYNAMIC_CAST(AP4_DvccAtom, desc->GetDetails().GetChild(AP4_ATOM_TYPE_DVCC));
+    if (dvcc) {
+        printf(",\n");
+        printf("\"dolby_vision\": {\n");
+        printf("   \"version_major\": %d,\n", dvcc->GetDvVersionMajor());
+        printf("   \"version_minor\": %d,\n", dvcc->GetDvVersionMinor());
+        printf("   \"profile\": %d,\n", dvcc->GetDvProfile());
+        const char* profile_name = AP4_DvccAtom::GetProfileName(dvcc->GetDvProfile());
+        printf("   \"profile_name\": \"%s\",\n", profile_name?profile_name:"");
+        printf("   \"level\": %d,\n", dvcc->GetDvLevel());
+        printf("   \"rpu_present\": %s,\n", dvcc->GetRpuPresentFlag()?"true":"false");
+        printf("   \"el_present\": %s,\n", dvcc->GetElPresentFlag()?"true":"false");
+        printf("   \"bl_present\": %s\n", dvcc->GetBlPresentFlag()?"true":"false");
+        printf("}");
+    }
+    
+    // Subtitles
+    if (desc->GetType() == AP4_SampleDescription::TYPE_SUBTITLES) {
+        printf(",\n");
+        printf("\"subtitles\": {\n");
+        AP4_SubtitleSampleDescription* subt_desc = AP4_DYNAMIC_CAST(AP4_SubtitleSampleDescription, desc);
+        printf("  \"namespace\": \"%s\",\n",       subt_desc->GetNamespace().GetChars());
+        printf("  \"schema_location\": \"%s\",\n", subt_desc->GetSchemaLocation().GetChars());
+        printf("  \"image_mime_type\": \"%s\"\n",  subt_desc->GetImageMimeType().GetChars());
+        printf("}");
     }
     
     printf("\n}");
@@ -1009,10 +1159,13 @@ ShowTrackInfo_Json(AP4_Movie& movie, AP4_Track& track, AP4_ByteStream& stream, b
     // show all sample descriptions
     printf("  \"sample_descriptions\":[\n");
     //AP4_AvcSampleDescription* avc_desc = NULL;
+    sep = "";
     for (unsigned int desc_index=0;
         AP4_SampleDescription* sample_desc = track.GetSampleDescription(desc_index);
         desc_index++) {
+        printf("%s", sep);
         ShowSampleDescription(*sample_desc, verbose);
+        sep = ",\n";
         //if (sample_desc->GetFormat() == AP4_SAMPLE_FORMAT_AVC1) {
         //    avc_desc = AP4_DYNAMIC_CAST(AP4_AvcSampleDescription, sample_desc);
         //}
@@ -1381,7 +1534,7 @@ main(int argc, char** argv)
 
     if (Options.format == JSON_FORMAT) printf("{\n");
     
-    AP4_File* file = new AP4_File(*input, AP4_DefaultAtomFactory::Instance, true);
+    AP4_File* file = new AP4_File(*input, true);
     input->Release();
     ShowFileInfo(*file);
 

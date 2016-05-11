@@ -34,6 +34,10 @@
 
 #include "Ap4.h"
 
+#ifdef __EMSCRIPTEN__
+#include "emscripten.h"
+#endif
+
 /*----------------------------------------------------------------------
 |   constants
 +---------------------------------------------------------------------*/
@@ -288,8 +292,25 @@ main(int argc, char** argv)
                 return 1;
             }
         } else {
+#ifdef __EMSCRIPTEN__
+            // Emscripten has to "mount" the filesystem to a virtual directory.
+            EM_ASM(FS.mkdir('/working'));
+            EM_ASM(FS.mount(NODEFS, { root: '.' }, '/working'));
+            const char* const mount_name = "/working/%s";
+            const int filename_size = snprintf(NULL, 0, mount_name, arg);
+            char* mounted_filename = (char*) malloc(filename_size + 1);
+            sprintf(mounted_filename, mount_name, arg);
+            filename = mounted_filename;
+#else
             filename = arg;
+#endif
             AP4_Result result = AP4_FileByteStream::Create(filename, AP4_FileByteStream::STREAM_MODE_READ, input);
+
+#ifdef __EMSCRIPTEN__
+            free(mounted_filename);
+            mounted_filename = NULL;
+#endif
+
             if (AP4_FAILED(result)) {
                 fprintf(stderr, "ERROR: cannot open input (%d)\n", result);
                 return 1;
@@ -317,7 +338,7 @@ main(int argc, char** argv)
 
     // inspect the atoms one by one
     AP4_Atom* atom;
-    AP4_AtomFactory& atom_factory = AP4_DefaultAtomFactory::Instance;
+    AP4_DefaultAtomFactory atom_factory;
     while (atom_factory.CreateAtomFromStream(*input, atom) == AP4_SUCCESS) {
         // remember the current stream position because the Inspect method
         // may read from the stream (there may be stream references in some

@@ -79,22 +79,22 @@ main(int argc, char** argv)
         return 1;
     }
 
-    AP4_ByteStream* input;
-    try {
-        input = new AP4_FileByteStream(filename,
-                               AP4_FileByteStream::STREAM_MODE_READ);
-    } catch (AP4_Exception) {
-        fprintf(stderr, "ERROR: cannot open input file (%s)\n", argv[1]);
+    AP4_ByteStream* input = NULL;
+    AP4_Result result = AP4_FileByteStream::Create(filename, 
+                                                   AP4_FileByteStream::STREAM_MODE_READ, 
+                                                   input);
+    if (AP4_FAILED(result)) {
+        fprintf(stderr, "ERROR: cannot open input file %s (%d)\n", filename, result);
         return 1;
     }
 
-    AP4_HevcParser parser;
+    AP4_HevcNalParser parser;
     unsigned int  nalu_count = 0;
     for (;;) {
         bool eos;
         unsigned char input_buffer[4096];
         AP4_Size bytes_in_buffer = 0;
-        AP4_Result result = input->ReadPartial(input_buffer, sizeof(input_buffer), bytes_in_buffer);
+        result = input->ReadPartial(input_buffer, sizeof(input_buffer), bytes_in_buffer);
         if (AP4_SUCCEEDED(result)) {
             eos = false;
         } else if (result == AP4_ERROR_EOS) {
@@ -114,8 +114,8 @@ main(int argc, char** argv)
             } 
             if (nalu) {
                 const unsigned char* nalu_payload = (const unsigned char*)nalu->GetData();
-                unsigned int   nalu_type = (nalu_payload[0] >> 1) & 0x3F;
-                const char*    nalu_type_name = AP4_HevcParser::NaluTypeName(nalu_type);
+                unsigned int         nalu_type = (nalu_payload[0] >> 1) & 0x3F;
+                const char*          nalu_type_name = AP4_HevcNalParser::NaluTypeName(nalu_type);
                 if (nalu_type_name == NULL) nalu_type_name = "UNKNOWN";
                 printf("NALU %5d: size=%5d, type=%02d (%s)", 
                        nalu_count, 
@@ -125,7 +125,7 @@ main(int argc, char** argv)
                 if (nalu_type == AP4_HEVC_NALU_TYPE_AUD_NUT) {
                     // Access Unit Delimiter
                     unsigned int pic_type = (nalu_payload[1]>>5);
-                    const char*  pic_type_name = AP4_HevcParser::PicTypeName(pic_type);
+                    const char*  pic_type_name = AP4_HevcNalParser::PicTypeName(pic_type);
                     if (pic_type_name == NULL) pic_type_name = "UNKNOWN";
                     printf(" [%d:%s]\n", pic_type, pic_type_name);
                 } else {

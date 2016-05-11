@@ -43,15 +43,15 @@ LanguageCodeMap = {
     'ven': 've', 'vie': 'vi', 'vol': 'vo', 'wel': 'cy', 'wln': 'wa', 'wol': 'wo', 'xho': 'xh', 'yid': 'yi',
     'yor': 'yo', 'zha': 'za', 'zho': 'zh', 'zul': 'zu', '```': 'und'
 }
- 
+
 def PrintErrorAndExit(message):
     sys.stderr.write(message+'\n')
     sys.exit(1)
-    
+
 def XmlDuration(d):
-    h  = d/3600
+    h  = int(d)/3600
     d -= h*3600
-    m  = d/60
+    m  = int(d)/60
     s  = d-m*60
     xsd = 'PT'
     if h:
@@ -59,11 +59,12 @@ def XmlDuration(d):
     if h or m:
         xsd += str(m)+'M'
     if s:
-        xsd += str(s)+'S'
+        xsd += ('%.3fS' % (s))
     return xsd
-    
+
 def Bento4Command(options, name, *args, **kwargs):
-    cmd = [path.join(options.exec_dir, name)]
+    executable = path.join(options.exec_dir, name)
+    cmd = [executable]
     for kwarg in kwargs:
         arg = kwarg.replace('_', '-')
         cmd.append('--'+arg)
@@ -73,27 +74,39 @@ def Bento4Command(options, name, *args, **kwargs):
     if options.debug:
         print 'COMMAND: ', cmd
     try:
-        return check_output(cmd) 
-    except CalledProcessError, e:
+        try:
+            return check_output(cmd)
+        except OSError as e:
+            if options.debug:
+                print 'executable ' + executable + ' not found in exec_dir, trying with PATH'
+            cmd[0] = path.basename(cmd[0])
+            return check_output(cmd)
+    except CalledProcessError as e:
         message = "binary tool failed with error %d" % e.returncode
         if options.verbose:
             message += " - " + str(cmd)
         raise Exception(message)
-    
-def Mp4Info(options, filename, **args):
-    return Bento4Command(options, 'mp4info', filename, **args)
+    except OSError as e:
+        raise Exception('executable "'+name+'" not found, ensure that it is in your path or in the directory '+options.exec_dir)
 
-def Mp4Dump(options, filename, **args):
-    return Bento4Command(options, 'mp4dump', filename, **args)
 
-def Mp4Split(options, filename, **args):
-    return Bento4Command(options, 'mp4split', filename, **args)
+def Mp4Info(options, filename, *args, **kwargs):
+    return Bento4Command(options, 'mp4info', filename, *args, **kwargs)
 
-def Mp4Fragment(options, input_filename, output_filename, **args):
-    return Bento4Command(options, 'mp4fragment', input_filename, output_filename, **args)
+def Mp4Dump(options, filename, *args, **kwargs):
+    return Bento4Command(options, 'mp4dump', filename, *args, **kwargs)
 
-def Mp4Encrypt(options, input_filename, output_filename, **args):
-    return Bento4Command(options, 'mp4encrypt', input_filename, output_filename, **args)
+def Mp4Split(options, filename, *args, **kwargs):
+    return Bento4Command(options, 'mp4split', filename, *args, **kwargs)
+
+def Mp4Fragment(options, input_filename, output_filename, *args, **kwargs):
+    return Bento4Command(options, 'mp4fragment', input_filename, output_filename, *args, **kwargs)
+
+def Mp4Encrypt(options, input_filename, output_filename, *args, **kwargs):
+    return Bento4Command(options, 'mp4encrypt', input_filename, output_filename, *args, **kwargs)
+
+def Mp42Hls(options, input_filename, *args, **kwargs):
+    return Bento4Command(options, 'mp42hls', input_filename, *args, **kwargs)
 
 class Mp4Atom:
     def __init__(self, type, size, position):
@@ -122,7 +135,7 @@ def WalkAtoms(filename, until=None):
             file.seek(cursor)
         except:
             break
-        
+
     return atoms
 
 
@@ -167,9 +180,11 @@ class Mp4Track:
             self.type = 'audio'
         elif info['type'] == 'Video':
             self.type = 'video'
+        elif info['type'] == 'Subtitles':
+            self.type = 'subtitles'
         else:
             self.type = 'other'
-        
+
         sample_desc = info['sample_descriptions'][0]
         if self.type == 'video':
             # get the width and height
@@ -179,16 +194,16 @@ class Mp4Track:
         if self.type == 'audio':
             self.sample_rate = sample_desc['sample_rate']
             self.channels = sample_desc['channels']
-                        
+
         self.language = info['language']
-        
+
     def update(self, options):
         # compute the total number of samples
         self.total_sample_count = reduce(operator.add, self.sample_counts, 0)
-        
+
         # compute the total duration
         self.total_duration = reduce(operator.add, self.segment_durations, 0)
-        
+
         # compute the average segment durations
         segment_count = len(self.segment_durations)
         if segment_count > 2:
@@ -198,7 +213,7 @@ class Mp4Track:
             self.average_segment_duration = self.segment_durations[0]
         else:
             self.average_segment_duration = 0
-            
+
         # compute the average segment bitrates
         self.media_size = reduce(operator.add, self.segment_sizes, 0)
         if self.total_duration:
@@ -206,8 +221,8 @@ class Mp4Track:
 
         # compute the max segment bitrates
         if len(self.segment_bitrates) > 1:
-            self.max_segment_bitrate = max(self.segment_bitrates[:-1])            
-        
+            self.max_segment_bitrate = max(self.segment_bitrates[:-1])
+
         # compute bandwidth
         if options.min_buffer_time == 0.0:
             options.min_buffer_time = self.average_segment_duration
@@ -226,7 +241,7 @@ class Mp4Track:
 
     def __repr__(self):
         return 'File '+str(self.parent.file_list_index)+'#'+str(self.id)
-    
+
 class Mp4File:
     def __init__(self, options, media_source):
         self.media_source    = media_source
@@ -254,7 +269,7 @@ class Mp4File:
         #print self.segments
         if options.debug:
             print '  found', len(self.segments), 'segments'
-                        
+
         # get the mp4 file info
         json_info = Mp4Info(options, filename, format='json', fast=True)
         self.info = json.loads(json_info, strict=False, object_pairs_hook=collections.OrderedDict)
@@ -266,11 +281,11 @@ class Mp4File:
         json_dump = Mp4Dump(options, filename, format='json', verbosity='1')
         #print json_dump
         self.tree = json.loads(json_dump, strict=False, object_pairs_hook=collections.OrderedDict)
-        
+
         # look for KIDs
         for track in self.tracks.itervalues():
             track.compute_kid()
-                
+
         # compute default sample durations and timescales
         for atom in self.tree:
             if atom['name'] == 'moov':
@@ -337,7 +352,7 @@ class Mp4File:
                         segment_bitrate = 0
                     track.segment_bitrates.append(segment_bitrate)
                 segment_size = 0
-                                                
+
         # parse the 'mfra' index if there is one and update segment durations.
         # this is needed to deal with input files that have an 'mfra' index that
         # does not exactly match the sample durations (because of rounding errors),
@@ -378,7 +393,7 @@ class Mp4File:
         # compute the total numer of samples for each track
         for track_id in self.tracks:
             self.tracks[track_id].update(options)
-                                                   
+
         # print debug info if requested
         if options.debug:
             for track in self.tracks.itervalues():
@@ -395,12 +410,12 @@ class Mp4File:
         for track_id in self.tracks:
             if track_id_to_find == 0 or track_id_to_find == track_id:
                 return self.tracks[track_id]
-        
+
         return None
 
     def find_tracks_by_type(self, track_type_to_find):
         return [track for track in self.tracks.values() if track_type_to_find == '' or track_type_to_find == track.type]
-            
+
 class MediaSource:
     def __init__(self, name):
         self.name = name
@@ -416,14 +431,20 @@ class MediaSource:
         else:
             self.filename = name
             self.spec = {}
-            
-        if 'type'     not in self.spec: self.spec['type']     = ''
-        if 'track'    not in self.spec: self.spec['track']    = 0
-        if 'language' not in self.spec: self.spec['language'] = ''
-        
+
+        if 'type'           not in self.spec: self.spec['type']     = ''
+        if 'track'          not in self.spec: self.spec['track']    = 0
+        if 'language'       not in self.spec: self.spec['language'] = ''
+
+        # check if we have an explicit format (default=mp4)
+        if '+format' in self.spec:
+            self.format = self.spec['+format']
+        else:
+            self.format = 'mp4'
+
         # keep a record of our original filename in case it gets changed later
         self.original_filename = self.filename
-        
+
     def __repr__(self):
         return self.name
 
@@ -441,7 +462,7 @@ def ComputeBandwidth(buffer_time, sizes, durations):
                 bandwidth = 8.0*(accu_size-buffer_size)/accu_duration
                 break
     return int(bandwidth)
-    
+
 def MakeNewDir(dir, exit_if_exists=False, severity=None):
     if os.path.exists(dir):
         if severity:
@@ -450,7 +471,19 @@ def MakeNewDir(dir, exit_if_exists=False, severity=None):
         if exit_if_exists:
             sys.exit(1)
     else:
-        os.mkdir(dir)        
+        os.mkdir(dir)
+
+def MakePsshBox(system_id, payload):
+    pssh_size = 12+16+4+len(payload)
+    return struct.pack('>I', pssh_size)+'pssh'+struct.pack('>I',0)+system_id+struct.pack('>I', len(payload))+payload
+
+def MakePsshBoxV1(system_id, kids, payload):
+    pssh_size = 12+16++4+(16*len(kids))+4+len(payload)
+    pssh = struct.pack('>I', pssh_size)+'pssh'+struct.pack('>I',0x01000000)+system_id+struct.pack('>I', len(kids))
+    for kid in kids:
+        pssh += kid.decode('hex')
+    pssh += struct.pack('>I', len(payload))+payload
+    return pssh
 
 def GetEncryptionKey(options, spec):
     if options.debug:
@@ -461,12 +494,219 @@ def GetEncryptionKey(options, spec):
     else:
         raise Exception('Key Locator scheme not supported')
 
+# Compute the Dolby Digital AudioChannelConfiguration value
+#
+# (MSB = 0)
+# 0 L
+# 1 C
+# 2 R
+# 3 Ls
+# 4 Rs
+# 5 Lc/Rc pair
+# 6 Lrs/Rrs pair
+# 7 Cs
+# 8 Ts
+# 9 Lsd/Rsd pair
+# 10 Lw/Rw pair
+# 11 Vhl/Vhr pair
+# 12 Vhc
+# 13 Lts/Rts pair
+# 14 LFE2
+# 15 LFE
+#
+# Using acmod
+# 000 Ch1, Ch2
+# 001 C
+# 010 L, R
+# 011 L, C, R
+# 100 L, R, S
+# 101 L, C, R, S
+# 110 L, R, SL, SR
+# 111 L, C, R, SL, SR
+#
+# chan_loc
+# 0 Lc/Rc pair
+# 1 Lrs/Rrs pair
+# 2 Cs
+# 3 Ts
+# 4 Lsd/Rsd pair
+# 5 Lw/Rw pair
+# 6 Lvh/Rvh pair
+# 7 Cvh
+# 8 LFE2
+#
+# The Digital Cinema specification, which is also referenced from the
+# Blu-ray Disc Specification, Specifies this speaker layout:
+#
+#       +---+       +---+       +---+
+#       |Vhl|       |Vhc|       |Vhr|        "High" speakers
+#       +---+       +---+       +---+
+# +---+ +---+ +---+ +---+ +---+ +---+ +---+
+# |Lw | | L | |Lc | | C | |Rc | | R | |Rw |
+# +---+ +---+ +---+ +---+ +---+ +---+ +---+
+#             +----+     +----+
+#             |LFE1]     |LFE2|
+# +---+       +----++---++----+       +---+
+# |Ls |             |Ts |             |Rs |
+# +---+             +---+             +---+
+#
+# +---+                               +---+
+# |Lsd|                               |Rsd|
+# +---+ +---+       +---+       +---+ +---+
+#       |Rls|       |Cs |       |Rrs|
+#       +---+       +---+       +---+
+#
+# Other names:
+# Constant              | HDMI  | Digital Cinema | DTS extension
+# ==============================|================|==============
+# FRONT_LEFT            | FL    | L              | L
+# FRONT_RIGHT           | FR    | R              | R
+# FRONT_CENTER          | FC    | C              | C
+# LOW_FREQUENCY         | LFE   | LFE            | LFE
+# BACK_LEFT             | (RLC) | Rls            | Lsr
+# BACK_RIGHT            | (RRC) | Rrs            | Rsr
+# FRONT_LEFT_OF_CENTER  | FLC   | Lc             | Lc
+# FRONT_RIGHT_OF_CENTER | FRC   | Rc             | Rc
+# BACK_CENTER           | RC    | Cs             | Cs
+# SIDE_LEFT             | (RL)  | Ls             | Lss
+# SIDE_RIGHT            | (RR)  | Rs             | Rss
+# TOP_CENTER            | TC    | Ts             | Oh
+# TOP_FRONT_LEFT        | FLH   | Vhl            | Lh
+# TOP_FRONT_CENTER      | FCH   | Vhc            | Ch
+# TOP_FRONT_RIGHT       | FRH   | Vhr            | Rh
+# TOP_BACK_LEFT         |       |                | Chr
+# TOP_BACK_CENTER       |       |                | Lhr
+# TOP_BACK_RIGHT        |       |                | Rhr
+# STEREO_LEFT           |       |                |
+# STEREO_RIGHT          |       |                |
+# WIDE_LEFT             | FLW   | Lw             | Lw
+# WIDE_RIGHT            | FRW   | Rw             | Rw
+# SURROUND_DIRECT_LEFT  |       | Lsd            | Ls
+# SURROUND_DIRECT_RIGHT |       | Rsd            | Rs
+
+DolbyDigital_chan_loc = {
+    0: 'Lc/Rc',
+    1: 'Lrs/Rrs',
+    2: 'Cs',
+    3: 'Ts',
+    4: 'Lsd/Rsd',
+    5: 'Lw/Rw',
+    6: 'Vhl/Vhr',
+    7: 'Vhc',
+    8: 'LFE2'
+}
+
+DolbyDigital_acmod = {
+    0: ['L', 'R'],  # in theory this is not supported but we'll pick a reasonable value
+    1: ['C'],
+    2: ['L', 'R'],
+    3: ['L', 'C', 'R'],
+    4: ['L', 'R', 'Cs'],
+    5: ['L', 'C', 'R', 'Cs'],
+    6: ['L', 'R', 'Ls', 'Rs'],
+    7: ['L', 'C', 'R', 'Ls', 'Rs']
+}
+
+def GetDolbyDigitalChannels(track):
+    sample_desc = track.info['sample_descriptions'][0]
+    if 'dolby_digital_info' not in sample_desc:
+        return (track.channels, [])
+    dd_info = sample_desc['dolby_digital_info']['substreams'][0]
+    channels = DolbyDigital_acmod[dd_info['acmod']][:]
+    if dd_info['lfeon'] == 1:
+        channels.append('LFE')
+    if dd_info['num_dep_sub'] and 'chan_loc' in dd_info:
+        chan_loc_value = dd_info['chan_loc']
+        for i in range(9):
+            if chan_loc_value & (1<<i):
+                channels.append(DolbyDigital_chan_loc[i])
+    channel_count = 0
+    for channel in channels:
+        if '/' in channel:
+            channel_count += 2
+        else:
+            channel_count += 1
+    return (channel_count, channels)
+
+def ComputeDolbyDigitalAudioChannelConfig(track):
+    flags = {
+        'L':       1<<15,
+        'C':       1<<14,
+        'R':       1<<13,
+        'Ls':      1<<12,
+        'Rs':      1<<11,
+        'Lc/Rc':   1<<10,
+        'Lrs/Rrs': 1<<9,
+        'Cs':      1<<8,
+        'Ts':      1<<7,
+        'Lsd/Rsd': 1<<6,
+        'Lw/Rw':   1<<5,
+        'Vhl/Vhr': 1<<4,
+        'Vhc':     1<<3,
+        'Lts/Rts': 1<<2,
+        'LFE2':    1<<1,
+        'LFE':     1<<0
+    }
+    (channel_count, channels) = GetDolbyDigitalChannels(track)
+    if len(channels) == 0:
+        return str(channel_count)
+    config = 0
+    for channel in channels:
+        if channel in flags:
+            config |= flags[channel]
+    return hex(config).upper()[2:]
+
+def ComputeDolbyDigitalAudioChannelMask(track):
+    masks = {
+        'L':       0x1,             # SPEAKER_FRONT_LEFT
+        'R':       0x2,             # SPEAKER_FRONT_RIGHT
+        'C':	   0x4,             # SPEAKER_FRONT_CENTER
+        'LFE':     0x8,             # SPEAKER_LOW_FREQUENCY
+        'Ls':      0x10,            # SPEAKER_BACK_LEFT
+        'Rs':      0x20,            # SPEAKER_BACK_RIGHT
+        'Lc':      0x40,            # SPEAKER_FRONT_LEFT_OF_CENTER
+        'Rc':      0x80,            # SPEAKER_FRONT_RIGHT_OF_CENTER
+        'Cs':      0x100,           # SPEAKER_BACK_CENTER
+        'Lrs':     0x200,           # SPEAKER_SIDE_LEFT
+        'Rrs':     0x400,           # SPEAKER_SIDE_RIGHT
+        'Ts':      0x800,           # SPEAKER_TOP_CENTER
+        'Vhl/Vhr': 0x1000 | 0x4000, # SPEAKER_TOP_FRONT_LEFT/SPEAKER_TOP_FRONT_RIGHT
+        'Vhc':     0x2000,          # SPEAKER_TOP_FRONT_CENTER
+    }
+    (channel_count, channels) = GetDolbyDigitalChannels(track)
+    if len(channels) == 0:
+        return (channel_count, 3)
+    channel_mask = 0
+    for channel in channels:
+        if channel in masks:
+            channel_mask |= masks[channel]
+        else:
+            (channel1, channel2) = channel.split('/')
+            if channel1 in masks:
+                channel_mask |= masks[channel1]
+            if channel2 in masks:
+                channel_mask |= masks[channel2]
+    return (channel_count, channel_mask)
+
+def ComputeDolbyDigitalSmoothStreamingInfo(track):
+    (channel_count, channel_mask) = ComputeDolbyDigitalAudioChannelMask(track)
+    info = "0006" # 1536 in little-endian
+    mask_hex_be = "{0:0{1}x}".format(channel_mask, 4)
+    info += mask_hex_be[2:4]+mask_hex_be[0:2]+'0000'
+    info += "af87fba7022dfb42a4d405cd93843bdd"
+    info += track.info['sample_descriptions'][0]['dolby_digital_info']['dec3_payload']
+    return (channel_count, info.lower())
+
+def ComputeMarlinPssh(options):
+    # create a dummy (empty) Marlin PSSH
+    return struct.pack('>I4sI4sII', 24, 'marl', 16, 'mkid', 0, 0)
+
 def DerivePlayReadyKey(seed, kid, swap=True):
     if len(seed) < 30:
         raise Exception('seed must be  >= 30 bytes')
     if len(kid) != 16:
         raise Exception('kid must be 16 bytes')
-    
+
     if swap:
         kid = kid[3]+kid[2]+kid[1]+kid[0]+kid[5]+kid[4]+kid[7]+kid[6]+kid[8:]
 
@@ -476,20 +716,20 @@ def DerivePlayReadyKey(seed, kid, swap=True):
     sha.update(seed)
     sha.update(kid)
     sha_A = [ord(x) for x in sha.digest()]
-    
+
     sha = hashlib.sha256()
     sha.update(seed)
     sha.update(kid)
     sha.update(seed)
     sha_B = [ord(x) for x in sha.digest()]
-    
+
     sha = hashlib.sha256()
     sha.update(seed)
     sha.update(kid)
     sha.update(seed)
     sha.update(kid)
     sha_C = [ord(x) for x in sha.digest()]
-        
+
     content_key = ""
     for i in range(16):
         content_key += chr(sha_A[i] ^ sha_A[i+16] ^ sha_B[i] ^ sha_B[i+16] ^ sha_C[i] ^ sha_C[i+16])
@@ -508,22 +748,33 @@ def WrapPlayreadyHeaderXml(header_xml):
 
 def ComputePlayReadyHeader(header_spec, kid_hex, key_hex):
     # construct the base64 header
+    if header_spec is None:
+        header_spec = ''
     if header_spec.startswith('#'):
         header_b64 = header_spec[1:]
         header = header_b64.decode('base64')
         if len(header) == 0:
             raise Exception('invalid base64 encoding')
         return header
-    elif os.path.exists(header_spec):
+    elif header_spec.startswith('@') or os.path.exists(header_spec):
+        # check that the file exists
+        if header_spec.startswith('@'):
+            header_spec = header_spec[1:]
+            if not os.path.exists(header_spec):
+                raise Exception('header data file does not exist')
+
         # read the header from the file
         header = open(header_spec, 'rb').read()
         header_xml = None
         if (ord(header[0]) == 0xff and ord(header[1]) == 0xfe) or (ord(header[0]) == 0xfe and ord(header[1]) == 0xff):
             # this is UTF-16 XML
             header_xml = header.decode('utf-16')
-        elif header[0] == '<':
+        elif header[0] == '<' and ord(header[1]) != 0x00:
             # this is ASCII or UTF-8 XML
             header_xml = header.decode('utf-8')
+        elif header[0] == '<' and ord(header[1]) == 0x00:
+            # this UTF-16LE XML without charset header
+            header_xml = header.decode('utf-16-le')
         if header_xml is not None:
             header = WrapPlayreadyHeaderXml(header_xml)
         return header
@@ -532,6 +783,7 @@ def ComputePlayReadyHeader(header_spec, kid_hex, key_hex):
             pairs = header_spec.split('#')
             fields = {}
             for pair in pairs:
+                if len(pair) == 0: continue
                 name, value = pair.split(':', 1)
                 fields[name] = value
         except:
@@ -559,6 +811,34 @@ def ComputePlayReadyHeader(header_spec, kid_hex, key_hex):
 
     return ""
 
+def ComputePrimetimeMetaData(metadata_spec, kid_hex):
+    # construct the base64 header
+    if metadata_spec is None:
+        metadata_spec = ''
+    if metadata_spec.startswith('#'):
+        metadata_b64 = metadata_spec[1:]
+        metadata = metadata_b64.decode('base64')
+        if len(metadata) == 0:
+            raise Exception('invalid base64 encoding')
+    elif metadata_spec.startswith('@'):
+        metadata_filename = metadata_spec[1:]
+        if not os.path.exists(metadata_filename):
+            raise Exception('data file does not exist')
+
+        # read the header from the file
+        metadata = open(metadata_filename, 'rb').read()
+
+    amet_size = 12+4+16
+    amet_flags = 0
+    if len(metadata):
+        amet_flags |= 2
+        amet_size += 4+len(metadata)
+    amet_box = struct.pack('>I4sII', amet_size, 'amet', amet_flags, 1)+kid_hex.decode("hex")
+    if len(metadata):
+        amet_box += struct.pack('>I', len(metadata))+metadata
+
+    return amet_box
+
 def WidevineVarInt(value):
     parts = [value % 128]
     value >>= 7
@@ -585,7 +865,7 @@ def WidevineMakeHeader(fields):
         buffer += chr(field_num<<3 | wire_type) + wire_val
     return buffer
 
-def ComputeWidevineHeader(header_spec, kid_hex, key_hex):
+def ComputeWidevineHeader(header_spec, kid_hex):
     # construct the base64 header
     if header_spec.startswith('#'):
         header_b64 = header_spec[1:]
@@ -609,7 +889,7 @@ def ComputeWidevineHeader(header_spec, kid_hex, key_hex):
         if 'content_id' in fields:
             protobuf_fields.append((4, fields['content_id'].decode('hex')))
         if 'policy' in fields:
-            protobuf_fields.append((6, fields['policy'].decode('hex')))
+            protobuf_fields.append((6, fields['policy']))
         return WidevineMakeHeader(protobuf_fields)
-    
-    return ""    
+
+    return ""

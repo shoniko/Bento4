@@ -3,32 +3,36 @@
 import sys
 import os
 import shutil
-import zipfile
 import re
-
-#############################################################
-# ZIP support
-#############################################################
-def ZipDir(top, archive, dir) :
-    entries = os.listdir(top)
-    for entry in entries: 
-        path = os.path.join(top, entry)
-        if os.path.isdir(path):
-            ZipDir(path, archive, os.path.join(dir, entry))
-        else:
-            zip_name = os.path.join(dir, entry)
-            archive.write(path, zip_name)
-
-def ZipIt(dir) :
-    zip_filename = dir+'.zip'
    
-    if os.path.exists(zip_filename):
-        os.remove(zip_filename)
+#############################################################
+# GetSdkRevision
+#############################################################
+def GetSdkRevision():
+    cmd = 'git status --porcelain -b'
+    lines = os.popen(cmd).readlines()
+    if not lines[0].startswith('## master'):
+        print 'ERROR: not on master branch'
+        return None
+    if len(lines) > 1:
+        print 'ERROR: git status not empty'
+        print ''.join(lines)
+        return None
 
-    archive = zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED)
-    ZipDir(dir, archive, dir)
-    archive.close()
-    
+    cmd = 'git tag --contains HEAD'
+    tags = os.popen(cmd).readlines()
+    if len(tags) != 1:
+        print 'ERROR: expected exactly one tag for HEAD, found', len(tags), ':', tags
+        return None
+    version = tags[0].strip()
+    sep = version.find('-')
+    if sep < 0:
+        print 'ERROR: unrecognized version string format:', version
+    return version[sep+1:]
+
+#############################################################
+# GetVersion
+#############################################################
 def GetVersion():
     f = open(BENTO4_HOME+'/Source/C++/Core/Ap4Version.h')
     lines = f.readlines()
@@ -39,7 +43,6 @@ def GetVersion():
             return m.group(1) + '-' + m.group(2) + '-' + m.group(3)
     return '0-0-0'
 
-
 #############################################################
 # Main
 #############################################################
@@ -47,7 +50,9 @@ script_dir  = os.path.abspath(os.path.dirname(__file__))
 BENTO4_HOME = os.path.join(script_dir,'..')
 BENTO4_VERSION = GetVersion()
 
-SDK_REVISION = sys.argv[1]
+SDK_REVISION = GetSdkRevision()
+if SDK_REVISION == None:
+    sys.exit(1)
 print "Exporting Revision", SDK_REVISION
 
 # compute paths
@@ -66,12 +71,7 @@ if not os.path.exists(SDK_OUTPUT_ROOT):
     os.makedirs(SDK_OUTPUT_ROOT)
 
 ### export
-cmd = 'svn export -r'+SDK_REVISION+' https://zebulon.bok.net/svn/Bento4/trunk '+SDK_NAME
+cmd = 'git archive --format=zip HEAD -o '+SDK_ROOT+'.zip' 
+print cmd
+#cmd = 'svn export -r'+SDK_REVISION+' https://zebulon.bok.net/svn/Bento4/trunk '+SDK_NAME
 os.system(cmd)
-
-### zip it
-ZipIt(SDK_NAME)
-
-### move the output
-shutil.move(SDK_NAME+'.zip', SDK_OUTPUT_ROOT)
-shutil.move(SDK_NAME, SDK_ROOT)

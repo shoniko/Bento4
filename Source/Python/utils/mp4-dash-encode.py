@@ -1,6 +1,7 @@
 from optparse import OptionParser
 from mp4utils import *
 from subprocess import check_output, CalledProcessError
+import os
 import json
 import math
 
@@ -61,7 +62,7 @@ class MediaSource:
         else:
             quiet = ''
 
-        command = 'ffprobe -of json -show_format -show_streams '+quiet+'"'+filename+'"'
+        command = 'ffprobe -of json -loglevel quiet -show_format -show_streams '+quiet+'"'+filename+'"'
         json_probe = run_command(options, command)
         self.json_info = json.loads(json_probe, strict=False)
 
@@ -96,8 +97,8 @@ def main():
                       help="Print out debugging information")
     parser.add_option('-k', '--keep-files', dest="keep_files", action='store_true', default=False,
                       help="Keep intermediate files")
-    parser.add_option('-o', '--output-dir', dest="output_dir",
-                      help="Output directory", metavar="<output-dir>", default='output')
+    parser.add_option('-o', '--output-dir', dest="output_dir",                     
+                      help="Output directory", metavar="<output-dir>", default='')
     parser.add_option('-b', '--bitrates', dest="bitrates",
                       help="Number of bitrates (default: 1)", default=1, type='int')
     parser.add_option('-r', '--resolution', dest='resolution',
@@ -106,16 +107,20 @@ def main():
                       help="Minimum bitrate (default: 500kbps)", default=500.0)
     parser.add_option('-n', '--max-video-bitrate', dest='max_bitrate', type='float',
                       help="Max Video bitrate (default: 2mbps)", default=2000.0),
-    parser.add_option('-p', '--video-profile', dest='video_profile',
-                      help="Video Encoding Profile: main or baseline (default)")
+    parser.add_option('-c', '--video-codec', dest='video_codec', default='libx264',
+                      help="Video Codec: libx264 (default) or libx265")
     parser.add_option('-a', '--audio-bitrate', dest='audio_bitrate', type='int',
                       help="Audio bitrate (default: 128kbps)", default=128)
-    parser.add_option('', '--select-streams', dest='select_streams', 
-                      help="Only encode these streams (comma-separated list of stream indexes or stream sepcifiers)")
+    parser.add_option('', '--select-streams', dest='select_streams',
+                      help="Only encode these streams (comma-separated list of stream indexes or stream specifiers)")
     parser.add_option('-s', '--segment-size', dest='segment_size', type='int',
                       help="Video segment size in frames (default: 3*fps)")
     parser.add_option('-t', '--text-overlay', dest='text_overlay', action='store_true', default=False,
                       help="Add a text overlay with the bitrate")
+    parser.add_option('', '--text-overlay-font', dest='text_overlay_font', default=None,
+                      help="Specify a TTF font file to use for the text overlay")
+    parser.add_option('-e', '--encoder-params', dest='encoder_params',
+                      help="Extra encoder parameters")
     parser.add_option('-f', '--force', dest="force_output", action="store_true",
                       help="Overwrite output files if they already exist", default=False)
     (options, args) = parser.parse_args()
@@ -132,9 +137,8 @@ def main():
     if options.min_bitrate > options.max_bitrate:
         raise Exception('ERROR: max bitrate must be >= min bitrate')
 
-    if options.video_profile:
-        if not options.video_profile in ['main', 'baseline']:
-            raise Exception('ERROR: unknown video encoding profile')
+    if options.output_dir:
+        MakeNewDir(dir=options.output_dir, exit_if_exists = not (options.force_output), severity='ERROR')
 
     if options.verbose:
         print 'Encoding', options.bitrates, 'bitrates, min bitrate =', options.min_bitrate, 'max bitrate =', options.max_bitrate
@@ -154,11 +158,21 @@ def main():
     (bitrates, resolutions) = compute_bitrates_and_resolutions(options)
 
     for i in range(options.bitrates):
-        output_filename = 'video_%05d.mp4' % int(bitrates[i])
+        output_filename = os.path.join(options.output_dir, 'video_%05d.mp4' % int(bitrates[i]))
         temp_filename = output_filename+'_'
-        base_cmd  = 'ffmpeg -i "%s" -strict experimental -acodec aac -ac 2 -ab %dk -profile:v baseline -preset slow -vcodec libx264' % (args[0], options.audio_bitrate)
+        base_cmd  = 'ffmpeg -i "%s" -strict experimental -codec:a libfdk_aac -ac 2 -ab %dk -preset slow -map_metadata -1 -codec:v %s' % (args[0], options.audio_bitrate, options.video_codec)
+        if options.video_codec == 'libx264':
+            base_cmd += ' -profile:v baseline'
         if options.text_overlay:
-            base_cmd += ' -vf "drawtext=fontfile=/Library/Fonts/Courier New.ttf: text='+str(int(bitrates[i]))+'kbps '+str(resolutions[i][0])+'*'+str(resolutions[i][1])+': fontsize=50:  x=(w)/8: y=h-(2*lh): fontcolor=white:"'
+            if not options.text_overlay_font:
+                font_file = "/Library/Fonts/Courier New.ttf"
+                if os.path.exists(font_file):
+                    options.text_overlay_font = font_file;
+                else:
+                    raise Exception('ERROR: no default font file, please use the --text-overlay-font option')
+            if not os.path.exists(options.text_overlay_font):
+                raise Exception('ERROR: font file "'+options.text_overlay_font+'" does not exist')
+            base_cmd += ' -vf "drawtext=fontfile='+options.text_overlay_font+': text='+str(int(bitrates[i]))+'kbps '+str(resolutions[i][0])+'*'+str(resolutions[i][1])+': fontsize=50:  x=(w)/8: y=h-(2*lh): fontcolor=white:"'
         if options.select_streams:
             specifiers = options.select_streams.split(',')
             for specifier in specifiers:
@@ -169,13 +183,18 @@ def main():
             base_cmd += ' -v quiet'
         if options.force_output:
             base_cmd += ' -y'
-        if options.video_profile:
-            base_cmd += ' -profile:v '+options.video_profile
 
         #x264_opts = "-x264opts keyint=%d:min-keyint=%d:scenecut=0:rc-lookahead=%d" % (options.segment_size, options.segment_size, options.segment_size)
-        x264_opts = "-force_key_frames \"expr:eq(mod(n,%d),0)\" -x264opts rc-lookahead=%d" % (options.segment_size, options.segment_size)
-        x264_opts += ':vbv-bufsize=%d:vbv-maxrate=%d' % (bitrates[i], int(bitrates[i]*1.5))
-        cmd = base_cmd+' '+x264_opts+' -s '+str(resolutions[i][0])+'x'+str(resolutions[i][1])+' -f mp4 '+temp_filename
+        #video_opts = "-g %d" % (options.segment_size)
+        video_opts = "-force_key_frames 'expr:eq(mod(n,%d),0)'" % (options.segment_size)
+        video_opts += " -bufsize %dk -maxrate %dk" % (bitrates[i], int(bitrates[i]*1.5))
+        if options.video_codec == 'libx264':
+            video_opts += " -x264opts rc-lookahead=%d" % (options.segment_size)
+        elif options.video_codec == 'libx265':
+            video_opts += ' -x265-params "no-open-gop=1:keyint=%d:no-scenecut=1:profile=main"' % (options.segment_size)
+        if options.encoder_params:
+            video_opts += ' ' + options.encoder_params
+        cmd = base_cmd+' '+video_opts+' -s '+str(resolutions[i][0])+'x'+str(resolutions[i][1])+' -f mp4 '+temp_filename
         if options.verbose:
             print 'ENCODING bitrate: %d, resolution: %dx%d' % (int(bitrates[i]), resolutions[i][0], resolutions[i][1])
         run_command(options, cmd)

@@ -364,15 +364,18 @@ class AP4_CencSubSampleEncrypter : public AP4_CencSampleEncrypter
 public:
     // constructor and destructor
     AP4_CencSubSampleEncrypter(AP4_StreamCipher* cipher,
-                               AP4_Size          nalu_length_size) :
+                               AP4_Size          nalu_length_size,
+                               AP4_UI32          format) :
         AP4_CencSampleEncrypter(cipher),
-        m_NaluLengthSize(nalu_length_size) {}
+        m_NaluLengthSize(nalu_length_size),
+        m_Format(format) {}
 
     // methods
     virtual bool UseSubSamples() { return true;}
                                          
     // members
     AP4_Size m_NaluLengthSize;
+    AP4_UI32 m_Format;
 };
 
 /*----------------------------------------------------------------------
@@ -384,8 +387,9 @@ public:
     // constructor and destructor
     AP4_CencCtrSubSampleEncrypter(AP4_StreamCipher* cipher,
                                   AP4_Size          nalu_length_size,
-                                  unsigned int      iv_size) :
-        AP4_CencSubSampleEncrypter(cipher, nalu_length_size),
+                                  unsigned int      iv_size,
+                                  AP4_UI32          format) :
+        AP4_CencSubSampleEncrypter(cipher, nalu_length_size, format),
         m_IvSize(iv_size) {}
 
     // methods
@@ -408,8 +412,9 @@ class AP4_CencCbcSubSampleEncrypter : public AP4_CencSubSampleEncrypter
 public:
     // constructor and destructor
     AP4_CencCbcSubSampleEncrypter(AP4_StreamCipher* cipher,
-                                  AP4_Size          nalu_length_size) :
-        AP4_CencSubSampleEncrypter(cipher, nalu_length_size) {}
+                                  AP4_Size          nalu_length_size,
+                                  AP4_UI32          format) :
+        AP4_CencSubSampleEncrypter(cipher, nalu_length_size, format) {}
 
     // methods
     virtual AP4_Result GetSubSampleMap(AP4_DataBuffer&      sample_data, 
@@ -428,11 +433,15 @@ class AP4_CencEncryptingProcessor : public AP4_Processor
 public:
     // types
     struct Encrypter {
-        Encrypter(AP4_UI32 track_id, AP4_CencSampleEncrypter* sample_encrypter) :
+        Encrypter(AP4_UI32 track_id, AP4_UI32 cleartext_fragments, AP4_CencSampleEncrypter* sample_encrypter) :
             m_TrackId(track_id),
+            m_CurrentFragment(0),
+            m_CleartextFragments(cleartext_fragments),
             m_SampleEncrypter(sample_encrypter) {}
         ~Encrypter() { delete m_SampleEncrypter; }
         AP4_UI32                 m_TrackId;
+        AP4_UI32                 m_CurrentFragment;
+        AP4_UI32                 m_CleartextFragments;
         AP4_CencSampleEncrypter* m_SampleEncrypter;
     };
 
@@ -451,7 +460,8 @@ public:
                                   AP4_ByteStream&   stream,
                                   AP4_Processor::ProgressListener* listener = NULL);
     virtual AP4_Processor::TrackHandler*    CreateTrackHandler(AP4_TrakAtom* trak);
-    virtual AP4_Processor::FragmentHandler* CreateFragmentHandler(AP4_TrexAtom*      trex,
+    virtual AP4_Processor::FragmentHandler* CreateFragmentHandler(AP4_TrakAtom*      trak,
+                                                                  AP4_TrexAtom*      trex,
                                                                   AP4_ContainerAtom* traf,
                                                                   AP4_ByteStream&    moof_data,
                                                                   AP4_Position       moof_offset);
@@ -478,7 +488,8 @@ public:
 
     // AP4_Processor methods
     virtual AP4_Processor::TrackHandler*    CreateTrackHandler(AP4_TrakAtom* trak);
-    virtual AP4_Processor::FragmentHandler* CreateFragmentHandler(AP4_TrexAtom*      trex,
+    virtual AP4_Processor::FragmentHandler* CreateFragmentHandler(AP4_TrakAtom*      trak,
+                                                                  AP4_TrexAtom*      trex,
                                                                   AP4_ContainerAtom* traf,
                                                                   AP4_ByteStream&    moof_data,
                                                                   AP4_Position       moof_offset);
@@ -502,7 +513,7 @@ public:
                              AP4_CencSingleSampleDecrypter*& decrypter);
     
     // methods
-    AP4_CencSingleSampleDecrypter(AP4_StreamCipher* cipher) : m_Cipher(cipher) {}
+    AP4_CencSingleSampleDecrypter(AP4_StreamCipher* cipher) : m_Cipher(cipher), m_FullBlocksOnly(false) {}
     virtual ~AP4_CencSingleSampleDecrypter();
     virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
                                          AP4_DataBuffer& data_out,
@@ -580,6 +591,25 @@ protected:
     AP4_CencSingleSampleDecrypter* m_SingleSampleDecrypter;
     AP4_CencSampleInfoTable*       m_SampleInfoTable;
     AP4_Ordinal                    m_SampleCursor;
+};
+
+/*----------------------------------------------------------------------
+|   AP4_CencSampleEncryptionInformationGroupEntry
++---------------------------------------------------------------------*/
+class AP4_CencSampleEncryptionInformationGroupEntry {
+public:
+    AP4_CencSampleEncryptionInformationGroupEntry(const AP4_UI08* data);
+    
+    // accessors
+    bool            IsEncrypted() const { return m_IsEncrypted; }
+    AP4_UI08        GetIvSize()   const { return m_IvSize;      }
+    const AP4_UI08* GetKid()      const { return &m_KID[9];     }
+    
+private:
+    // members
+    bool     m_IsEncrypted;
+    AP4_UI08 m_IvSize;
+    AP4_UI08 m_KID[16];
 };
 
 #endif // _AP4_COMMON_ENCRYPTION_H_

@@ -42,6 +42,7 @@
 #include "Ap4TfraAtom.h"
 #include "Ap4TrunAtom.h"
 #include "Ap4TrexAtom.h"
+#include "Ap4TkhdAtom.h"
 #include "Ap4SidxAtom.h"
 #include "Ap4DataBuffer.h"
 #include "Ap4Debug.h"
@@ -104,6 +105,36 @@ AP4_DefaultFragmentHandler::ProcessSample(AP4_DataBuffer& data_in, AP4_DataBuffe
 }
 
 /*----------------------------------------------------------------------
+|   FragmentMapEntry
++---------------------------------------------------------------------*/
+typedef struct {
+    AP4_UI64 before;
+    AP4_UI64 after;
+} FragmentMapEntry;
+
+/*----------------------------------------------------------------------
+|   FindFragmentMapEntry
++---------------------------------------------------------------------*/
+static const FragmentMapEntry*
+FindFragmentMapEntry(AP4_Array<FragmentMapEntry>& fragment_map, AP4_UI64 fragment_offset) {
+    int first = 0;
+    int last = fragment_map.ItemCount();
+    while (first < last) {
+        int middle = (last+first)/2;
+        AP4_UI64 middle_value = fragment_map[middle].before;
+        if (fragment_offset < middle_value) {
+            last = middle;
+        } else if (fragment_offset > middle_value) {
+            first = middle+1;
+        } else {
+            return &fragment_map[middle];
+        }
+    }
+    
+    return NULL;
+}
+
+/*----------------------------------------------------------------------
 |   AP4_Processor::ProcessFragments
 +---------------------------------------------------------------------*/
 AP4_Result
@@ -116,6 +147,8 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
                                 AP4_ByteStream&            output)
 {
     unsigned int fragment_index = 0;
+    AP4_Array<FragmentMapEntry> fragment_map;
+    
     for (AP4_List<AP4_AtomLocator>::Item* item = atoms.FirstItem();
                                           item;
                                           item = item->GetNext(), ++fragment_index) {
@@ -146,6 +179,24 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
             AP4_ContainerAtom* traf = AP4_DYNAMIC_CAST(AP4_ContainerAtom, child);
             AP4_TfhdAtom* tfhd = AP4_DYNAMIC_CAST(AP4_TfhdAtom, traf->GetChild(AP4_ATOM_TYPE_TFHD));
             
+            // find the 'trak' for this track
+            AP4_TrakAtom* trak = NULL;
+            for (AP4_List<AP4_Atom>::Item* child_item = moov->GetChildren().FirstItem();
+                                           child_item;
+                                           child_item = child_item->GetNext()) {
+                AP4_Atom* child_atom = child_item->GetData();
+                if (child_atom->GetType() == AP4_ATOM_TYPE_TRAK) {
+                    trak = AP4_DYNAMIC_CAST(AP4_TrakAtom, child_atom);
+                    if (trak) {
+                        AP4_TkhdAtom* tkhd = AP4_DYNAMIC_CAST(AP4_TkhdAtom, trak->GetChild(AP4_ATOM_TYPE_TKHD));
+                        if (tkhd && tkhd->GetTrackId() == tfhd->GetTrackId()) {
+                            break;
+                        }
+                    }
+                    trak = NULL;
+                }
+            }
+            
             // find the 'trex' for this track
             AP4_ContainerAtom* mvex = NULL;
             AP4_TrexAtom*      trex = NULL;
@@ -157,14 +208,16 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
                     AP4_Atom* child_atom = child_item->GetData();
                     if (child_atom->GetType() == AP4_ATOM_TYPE_TREX) {
                         trex = AP4_DYNAMIC_CAST(AP4_TrexAtom, child_atom);
-                        if (trex && trex->GetTrackId() == tfhd->GetTrackId()) break;
+                        if (trex && trex->GetTrackId() == tfhd->GetTrackId()) {
+                            break;
+                        }
                         trex = NULL;
                     }
                 }
             }
-            
+
             // create the handler for this traf
-            AP4_Processor::FragmentHandler* handler = CreateFragmentHandler(trex, traf, input, atom_offset);
+            AP4_Processor::FragmentHandler* handler = CreateFragmentHandler(trak, trex, traf, input, atom_offset);
             if (handler) {
                 result = handler->ProcessFragment();
                 if (AP4_FAILED(result)) return result;
@@ -186,7 +239,11 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
         AP4_UI64 moof_out_start = 0;
         output.Tell(moof_out_start);
         moof->Write(output);
-            
+        
+        // remember the location of this fragment
+        FragmentMapEntry map_entry = {atom_offset, moof_out_start};
+        fragment_map.Append(map_entry);
+
         // write an mdat header
         AP4_Position mdat_out_start;
         AP4_UI64 mdat_size = AP4_ATOM_HEADER_SIZE;
@@ -294,24 +351,6 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
         moof->Write(output);
         output.Seek(mdat_out_end);
         
-        // update the mfra if we have one
-        if (mfra) {
-            for (AP4_List<AP4_Atom>::Item* mfra_item = mfra->GetChildren().FirstItem();
-                                           mfra_item;
-                                           mfra_item = mfra_item->GetNext()) {
-                if (mfra_item->GetData()->GetType() != AP4_ATOM_TYPE_TFRA) continue;
-                AP4_TfraAtom* tfra = AP4_DYNAMIC_CAST(AP4_TfraAtom, mfra_item->GetData());
-                if (tfra == NULL) continue;
-                AP4_Array<AP4_TfraAtom::Entry>& entries     = tfra->GetEntries();
-                AP4_Cardinal                    entry_count = entries.ItemCount();
-                for (unsigned int i=0; i<entry_count; i++) {
-                    if (entries[i].m_MoofOffset == locator->m_Offset) {
-                        entries[i].m_MoofOffset = moof_out_start;
-                    }
-                }
-            }
-        }
-
         // update the sidx if we have one
         if (sidx && fragment_index < sidx->GetReferences().ItemCount()) {
             if (fragment_index == 0) {
@@ -319,7 +358,7 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
             }
             AP4_LargeSize fragment_size = mdat_out_end-moof_out_start;
             AP4_SidxAtom::Reference& sidx_ref = sidx->UseReferences()[fragment_index];
-            sidx_ref.m_ReferencedSize = fragment_size;
+            sidx_ref.m_ReferencedSize = (AP4_UI32)fragment_size;
         }
         
         // cleanup
@@ -332,7 +371,26 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
             delete sample_tables[i];
         }
     }
-     
+    
+    // update the mfra if we have one
+    if (mfra) {
+        for (AP4_List<AP4_Atom>::Item* mfra_item = mfra->GetChildren().FirstItem();
+                                       mfra_item;
+                                       mfra_item = mfra_item->GetNext()) {
+            if (mfra_item->GetData()->GetType() != AP4_ATOM_TYPE_TFRA) continue;
+            AP4_TfraAtom* tfra = AP4_DYNAMIC_CAST(AP4_TfraAtom, mfra_item->GetData());
+            if (tfra == NULL) continue;
+            AP4_Array<AP4_TfraAtom::Entry>& entries     = tfra->GetEntries();
+            AP4_Cardinal                    entry_count = entries.ItemCount();
+            for (unsigned int i=0; i<entry_count; i++) {
+                const FragmentMapEntry* found = FindFragmentMapEntry(fragment_map, entries[i].m_MoofOffset);
+                if (found) {
+                    entries[i].m_MoofOffset = found->after;
+                }
+            }
+        }
+    }
+    
     return AP4_SUCCESS;
 }
 
@@ -340,7 +398,8 @@ AP4_Processor::ProcessFragments(AP4_MoovAtom*              moov,
 |   AP4_Processor::CreateFragmentHandler
 +---------------------------------------------------------------------*/
 AP4_Processor::FragmentHandler* 
-AP4_Processor::CreateFragmentHandler(AP4_TrexAtom*      /* trex */,
+AP4_Processor::CreateFragmentHandler(AP4_TrakAtom*      /* trak */,
+                                     AP4_TrexAtom*      /* trex */,
                                      AP4_ContainerAtom* traf,
                                      AP4_ByteStream&    /* moof_data   */,
                                      AP4_Position       /* moof_offset */)

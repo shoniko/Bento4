@@ -8,8 +8,8 @@ from optparse import OptionParser
 
 WV_DEFAULT_SERVER_URL  = 'https://license.uat.widevine.com/cenc/getcontentkey'
 WV_DEFAULT_PROVIDER    = 'widevine_test'
-WV_DEFAULT_SIGNING_KEY = '1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9'.decode('hex')
-WV_DEFAULT_SIGNING_IV  = 'd58ce954203b7c9a9a9d467f59839249'.decode('hex')
+WV_DEFAULT_SIGNING_KEY = '1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9'
+WV_DEFAULT_SIGNING_IV  = 'd58ce954203b7c9a9a9d467f59839249'
 
 try:
 	import requests
@@ -28,9 +28,9 @@ parser.add_option('-v', '--verbose', dest="verbose", action='store_true', defaul
 parser.add_option('-d', '--debug', dest="debug", action='store_true', default=False,
                       help="Print debug information")
 parser.add_option('-u', '--url', dest="server_url", default=WV_DEFAULT_SERVER_URL,
-                  help="Widevine Server URL")
+                  help="Widevine Server URL (default: "+WV_DEFAULT_SERVER_URL+")")
 parser.add_option('-p', '--provider', dest="provider", default=WV_DEFAULT_PROVIDER,
-                  help="Widevine provider/signer name")
+                  help="Widevine provider/signer name (default: "+WV_DEFAULT_PROVIDER+")")
 parser.add_option('-k', '--aes-signing-key', dest="aes_signing_key", default=WV_DEFAULT_SIGNING_KEY,
                   help="AES signing key")
 parser.add_option('-i', '--aes-signing-iv', dest="aes_signing_iv", default=WV_DEFAULT_SIGNING_IV,
@@ -44,8 +44,9 @@ parser.add_option('-l', '--policy', dest="policy", default='',
 
 (options, args) = parser.parse_args()
 if not options.content_id:
-	print 'ERROR: missing --content-id option'
-	sys.exit(1)
+    print 'ERROR: missing --content-id option'
+    parser.print_help()
+    sys.exit(1)
 
 rq_payload = {
 	'content_id': base64_encode(options.content_id.decode('hex')),
@@ -64,7 +65,7 @@ if options.debug:
 
 sha1_hasher = hashlib.sha1()
 sha1_hasher.update(rq_payload_json)
-rq_payload_signature = aes.cbc_encrypt(sha1_hasher.digest(), options.aes_signing_key, options.aes_signing_iv)
+rq_payload_signature = aes.cbc_encrypt(sha1_hasher.digest(), options.aes_signing_key.decode('hex'), options.aes_signing_iv.decode('hex'))
 
 post_body = {
 	"request":base64_encode(rq_payload_json),

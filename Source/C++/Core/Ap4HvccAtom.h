@@ -38,7 +38,10 @@
 /*----------------------------------------------------------------------
 |   constants
 +---------------------------------------------------------------------*/
-const AP4_UI08 AP4_HEVC_PROFILE_MAIN     = 1;
+const AP4_UI08 AP4_HEVC_PROFILE_MAIN               = 1;
+const AP4_UI08 AP4_HEVC_PROFILE_MAIN_10            = 2;
+const AP4_UI08 AP4_HEVC_PROFILE_MAIN_STILL_PICTURE = 3;
+const AP4_UI08 AP4_HEVC_PROFILE_REXT               = 4;
 
 const AP4_UI08 AP4_HEVC_CHROMA_FORMAT_MONOCHROME = 0;
 const AP4_UI08 AP4_HEVC_CHROMA_FORMAT_420        = 1;
@@ -70,7 +73,26 @@ public:
     // constructors
     AP4_HvccAtom();
     AP4_HvccAtom(const AP4_HvccAtom& other); // copy construtor
-    
+    AP4_HvccAtom(AP4_UI08                         general_profile_space,
+                 AP4_UI08                         general_tier_flag,
+                 AP4_UI08                         general_profile,
+                 AP4_UI32                         general_profile_compatibility_flags,
+                 AP4_UI64                         general_constraint_indicator_flags,
+                 AP4_UI08                         general_level,
+                 AP4_UI32                         min_spatial_segmentation,
+                 AP4_UI08                         parallelism_type,
+                 AP4_UI08                         chroma_format,
+                 AP4_UI08                         luma_bit_depth,
+                 AP4_UI08                         chroma_bit_depth,
+                 AP4_UI16                         average_frame_rate,
+                 AP4_UI08                         constant_frame_rate,
+                 AP4_UI08                         num_temporal_layers,
+                 AP4_UI08                         temporal_id_nested,
+                 AP4_UI08                         nalu_length_size,
+                 const AP4_Array<AP4_DataBuffer>& video_parameters,
+                 const AP4_Array<AP4_DataBuffer>& sequence_parameters,
+                 const AP4_Array<AP4_DataBuffer>& picture_parameters);
+
     // methods
     virtual AP4_Result InspectFields(AP4_AtomInspector& inspector);
     virtual AP4_Result WriteFields(AP4_ByteStream& stream);

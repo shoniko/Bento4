@@ -1,7 +1,7 @@
 #! /usr/bin/python
 
 ########################################################################
-#      
+#
 #      Packaging Script for the Bento4 SDK
 #
 #      Original author:  Gilles Boccon-Gibod
@@ -37,9 +37,26 @@ def GetVersion():
 # GetSdkRevision
 #############################################################
 def GetSdkRevision():
-    cmd = 'git rev-list HEAD --count'
-    revision = 0
-    return os.popen(cmd).readlines()[0].strip()
+    cmd = 'git status --porcelain -b'
+    lines = os.popen(cmd).readlines()
+    if not lines[0].startswith('## master'):
+        print 'ERROR: not on master branch'
+        return None
+    if len(lines) > 1:
+        print 'ERROR: git status not empty'
+        print ''.join(lines)
+        return None
+
+    cmd = 'git tag --contains HEAD'
+    tags = os.popen(cmd).readlines()
+    if len(tags) != 1:
+        print 'ERROR: expected exactly one tag for HEAD, found', len(tags), ':', tags
+        return None
+    version = tags[0].strip()
+    sep = version.find('-')
+    if sep < 0:
+        print 'ERROR: unrecognized version string format:', version
+    return version[sep+1:]
 
 #############################################################
 # File Copy
@@ -60,14 +77,14 @@ def CopyFiles(file_patterns, configs=[''], rename_map={}):
                     dest_name = dest_dir
                 print 'COPY: '+file+' -> '+dest_name
                 shutil.copy2(file, dest_name)
-        
+
 #############################################################
 # ZIP support
 #############################################################
 def ZipDir(top, archive, dir) :
     #print 'ZIP: ',top,dir
     entries = os.listdir(top)
-    for entry in entries: 
+    for entry in entries:
         path = os.path.join(top, entry)
         if os.path.isdir(path):
             ZipDir(path, archive, os.path.join(dir, entry))
@@ -80,7 +97,7 @@ def ZipIt(basename, dir) :
     path = basename+'/'+dir
     zip_filename = path+'.zip'
     print 'ZIP: '+path+' -> '+zip_filename
-   
+
     if os.path.exists(zip_filename):
         os.remove(zip_filename)
 
@@ -90,7 +107,7 @@ def ZipIt(basename, dir) :
     else:
         archive.write(path)
     archive.close()
-    
+
 #############################################################
 # Main
 #############################################################
@@ -105,7 +122,7 @@ if len(sys.argv) > 2:
 else:
     script_dir  = os.path.abspath(os.path.dirname(__file__))
     BENTO4_HOME = os.path.join(script_dir,'..')
-    
+
 # ensure that BENTO4_HOME has been set and exists
 if not os.path.exists(BENTO4_HOME) :
     print 'ERROR: BENTO4_HOME ('+BENTO4_HOME+') does not exist'
@@ -113,7 +130,7 @@ if not os.path.exists(BENTO4_HOME) :
 else :
     print 'BENTO4_HOME = ' + BENTO4_HOME
 
-# compute the target if it is not specified    
+# compute the target if it is not specified
 if SDK_TARGET is None:
     targets_dir = BENTO4_HOME+'/Build/Targets'
     targets_dirs = os.listdir(targets_dir)
@@ -129,45 +146,47 @@ if SDK_TARGET is None:
             platform_id = 'linux-x86_64'
         if (platform.machine().startswith('arm')):
             platform_id = 'linux-arm'
-    
-    platform_to_target_map = { 
+
+    platform_to_target_map = {
         'linux-i386'  : 'x86-unknown-linux',
         'linux-x86_64': 'x86_64-unknown-linux',
         'linux2'      : 'x86-unknown-linux',
         'win32'       : 'x86-microsoft-win32-vs2010',
         'darwin'      : 'universal-apple-macosx'
     }
-        
+
     if platform_to_target_map.has_key(platform_id):
         SDK_TARGET = platform_to_target_map[platform_id]
     else:
         print 'ERROR: SDK_TARGET is not set and cannot be detected'
         sys.exit(1)
-        
+
 print "TARGET = " + SDK_TARGET
 
 BENTO4_VERSION = GetVersion()
 
 # compute paths
 SDK_REVISION = GetSdkRevision()
+if SDK_REVISION is None:
+    sys.exit(1)
 SDK_NAME='Bento4-SDK-'+BENTO4_VERSION+'-'+SDK_REVISION+'.'+SDK_TARGET
 SDK_BUILD_ROOT=BENTO4_HOME+'/SDK'
 SDK_ROOT=SDK_BUILD_ROOT+'/'+SDK_NAME
 SDK_TARGET_DIR='Build/Targets/'+SDK_TARGET
 SDK_TARGET_ROOT=BENTO4_HOME+'/'+SDK_TARGET_DIR
-    
-# special case for Xcode builds        
+
+# special case for Xcode builds
 if SDK_TARGET == 'universal-apple-macosx':
     SDK_TARGET_DIR='Build/Targets/universal-apple-macosx/build'
-    
+
 print SDK_NAME
 
 # remove any previous SDK directory
 if os.path.exists(SDK_ROOT):
     shutil.rmtree(SDK_ROOT)
-    
-# copy single-config files
-single_config_files = [
+
+# copy headers, docs and utils
+misc_files = [
     ('Source/C++/Core','*.h','include'),
     ('Source/C++/Adapters','*.h','include'),
     ('Source/C++/CApi','*.h','include'),
@@ -177,12 +196,11 @@ single_config_files = [
     ('Documents','*.txt','docs'),
     ('Documents/Doxygen','*.chm','docs'),
     ('Documents/Doxygen','*.zip','docs'),
-    ('Documents/Misc','*.doc','docs'),
     ('Documents/SDK','*.doc','docs'),
     ('Documents/SDK','*.pdf','docs'),
     ('Source/Python/utils', '*.py', 'utils')
 ]
-CopyFiles(single_config_files)
+CopyFiles(misc_files)
 
 if SDK_TARGET == 'universal-apple-macosx':
     script_bin_dir = 'macosx'
@@ -190,50 +208,54 @@ elif SDK_TARGET.startswith('x86-microsoft-win32'):
     script_bin_dir = 'win32'
 elif SDK_TARGET == 'x86-unknown-linux':
     script_bin_dir = 'linux-x86'
+elif SDK_TARGET == 'x86-unknown-linux':
+    script_bin_dir = 'linux-x86_64'
 else:
     script_bin_dir = None
 
-if script_bin_dir:
-    script_bin_in = SDK_TARGET_DIR+'/Release'
-    script_bin_out = 'utils/bin/'+script_bin_dir
-    script_files = [
-        (script_bin_in, 'mp4info',    script_bin_out),
-        (script_bin_in, 'mp4dump',    script_bin_out),
-        (script_bin_in, 'mp4split',   script_bin_out),
-        (script_bin_in, 'mp4encrypt', script_bin_out),
-        (script_bin_in, 'mp4info.exe',    script_bin_out),
-        (script_bin_in, 'mp4dump.exe',    script_bin_out),
-        (script_bin_in, 'mp4split.exe',   script_bin_out),
-        (script_bin_in, 'mp4encrypt.exe', script_bin_out)
-    ]
-    CopyFiles(script_files)
-    
-# copy multi-config files
-multi_config_files = [
-    (SDK_TARGET_DIR,'mp4*.exe','bin'),
-    (SDK_TARGET_DIR,'aac2mp4.exe','bin'),
-    (SDK_TARGET_DIR,'mp42aac','bin'),
-    (SDK_TARGET_DIR,'mp4dcfpackager','bin'),
-    (SDK_TARGET_DIR,'mp4decrypt','bin'),
-    (SDK_TARGET_DIR,'mp4dump','bin'),
-    (SDK_TARGET_DIR,'mp4edit','bin'),
-    (SDK_TARGET_DIR,'mp4encrypt','bin'),
-    (SDK_TARGET_DIR,'mp4extract','bin'),
-    (SDK_TARGET_DIR,'mp4fragment','bin'),
-    (SDK_TARGET_DIR,'mp4split','bin'),
-    (SDK_TARGET_DIR,'mp4compact','bin'),
-    (SDK_TARGET_DIR,'mp4info','bin'),
-    (SDK_TARGET_DIR,'mp4rtphintinfo','bin'),
-    (SDK_TARGET_DIR,'mp4tag','bin'),
-    (SDK_TARGET_DIR,'mp4mux','bin'),
-    (SDK_TARGET_DIR,'aac2mp4','bin'),
-    (SDK_TARGET_DIR,'mp42ts','bin'),
-    (SDK_TARGET_DIR,'*.a','lib'),
-    (SDK_TARGET_DIR,'*.dll','bin'),        
-    (SDK_TARGET_DIR,'*.dylib','bin'),
-    (SDK_TARGET_DIR,'*.so','bin')
+# binaries
+bin_in = SDK_TARGET_DIR+'/Release'
+bin_files = [
+    (bin_in,'mp4*.exe','bin'),
+    (bin_in,'aac2mp4.exe','bin'),
+    (bin_in,'mp42aac','bin'),
+    (bin_in,'mp4dcfpackager','bin'),
+    (bin_in,'mp4decrypt','bin'),
+    (bin_in,'mp4dump','bin'),
+    (bin_in,'mp4edit','bin'),
+    (bin_in,'mp4encrypt','bin'),
+    (bin_in,'mp4extract','bin'),
+    (bin_in,'mp4fragment','bin'),
+    (bin_in,'mp4split','bin'),
+    (bin_in,'mp4compact','bin'),
+    (bin_in,'mp4info','bin'),
+    (bin_in,'mp4rtphintinfo','bin'),
+    (bin_in,'mp4tag','bin'),
+    (bin_in,'mp4mux','bin'),
+    (bin_in,'aac2mp4','bin'),
+    (bin_in,'mp42ts','bin'),
+    (bin_in,'mp42hls','bin'),
+    (bin_in,'*.a','lib'),
+    (bin_in,'*.dll','bin'),
+    (bin_in,'*.dylib','bin'),
+    (bin_in,'*.so','bin')
 ]
-CopyFiles(multi_config_files, configs=['Debug','Release'])
+CopyFiles(bin_files)
+
+# wrappers
+if '-microsoft-' in SDK_TARGET:
+    wrapper_files = [
+        ('Source/Python/wrappers', 'mp4dash.bat','bin'),
+        ('Source/Python/wrappers', 'mp4dashclone.bat','bin'),
+        ('Source/Python/wrappers', 'mp4hls.bat','bin')
+    ]
+else:
+    wrapper_files = [
+        ('Source/Python/wrappers', 'mp4dash','bin'),
+        ('Source/Python/wrappers', 'mp4dashclone','bin'),
+        ('Source/Python/wrappers', 'mp4hls','bin')
+    ]
+CopyFiles(wrapper_files)
 
 # remove any previous zip file
 ZipIt(SDK_BUILD_ROOT, SDK_NAME)

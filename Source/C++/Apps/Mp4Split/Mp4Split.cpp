@@ -42,7 +42,7 @@
                "(c) 2002-2013 Axiomatic Systems, LLC"
  
 #define AP4_SPLIT_DEFAULT_INIT_SEGMENT_NAME  "init.mp4"
-#define AP4_SPLIT_DEFAULT_MEDIA_SEGMENT_NAME "segment-%llu.%04llu.m4f"
+#define AP4_SPLIT_DEFAULT_MEDIA_SEGMENT_NAME "segment-%llu.%04llu.m4s"
 #define AP4_SPLIT_DEFAULT_PATTERN_PARAMS     "IN"
 
 /*----------------------------------------------------------------------
@@ -54,6 +54,7 @@ struct Options {
     const char*  init_segment_name;
     const char*  media_segment_name;
     const char*  pattern_params;
+    unsigned int start_number;
     unsigned int track_id;
     bool         audio_only;
     bool         video_only;
@@ -74,11 +75,12 @@ PrintUsageAndExit()
             "  --verbose : print verbose information when running\n"
             "  --init-segment <filename> : name of init segment (default: init.mp4)\n"
             "  --init-only : only output the init segment (no media segments)\n"
-            "  --media-segment <filename-pattern> (default: segment-%%llu.%%04llu.m4f)\n"
+            "  --media-segment <filename-pattern> (default: segment-%%llu.%%04llu.m4s)\n"
             "    NOTE: all parameters are 64-bit integers, use %%llu in the pattern\n"
+            "  --start-number <n> : start numbering segments at <n> (default=1)\n"
             "  --pattern-parameters <params> : one or more selector letter (default: IN)\n"
             "     I: track ID\n"
-            "     N: segment number, starting with 0\n"
+            "     N: segment number\n"
             "  --track-id <track-id> : only output segments with this track ID\n"
             "  --audio : only output audio segments\n"
             "  --video : only output video segments\n");
@@ -102,7 +104,7 @@ NextFragmentIndex(unsigned int track_id)
         }
     }
     if (track_index == -1) {
-        track_index = 0;
+        track_index = TrackCounters.ItemCount();
         TrackIds.Append(track_id);
         TrackCounters.Append(0);
     }
@@ -125,6 +127,7 @@ main(int argc, char** argv)
     Options.init_segment_name      = AP4_SPLIT_DEFAULT_INIT_SEGMENT_NAME;
     Options.media_segment_name     = AP4_SPLIT_DEFAULT_MEDIA_SEGMENT_NAME;
     Options.pattern_params         = AP4_SPLIT_DEFAULT_PATTERN_PARAMS;
+    Options.start_number           = 1;
     Options.track_id               = 0;
     Options.audio_only             = false;
     Options.video_only             = false;
@@ -157,6 +160,8 @@ main(int argc, char** argv)
             Options.pattern_params = *args++;
         } else if (!strcmp(arg, "--track-id")) {
             Options.track_id = strtoul(*args++, NULL, 10);
+        } else if (!strcmp(arg, "--start-number")) {
+            Options.start_number = strtoul(*args++, NULL, 10);
         } else if (!strcmp(arg, "--init-only")) {
             Options.init_only = true;
         } else if (!strcmp(arg, "--audio")) {
@@ -208,7 +213,7 @@ main(int argc, char** argv)
     }
     
     // get the movie
-    AP4_File* file = new AP4_File(*input, AP4_DefaultAtomFactory::Instance, true);
+    AP4_File* file = new AP4_File(*input, true);
     AP4_Movie* movie = file->GetMovie();
     if (movie == NULL) {
         fprintf(stderr, "no movie found in file\n");
@@ -297,9 +302,10 @@ main(int argc, char** argv)
         
     AP4_Atom* atom = NULL;
     unsigned int track_id = 0;
+    AP4_DefaultAtomFactory atom_factory;
     for (;!Options.init_only;) {
         // process the next atom
-        result = AP4_DefaultAtomFactory::Instance.CreateAtomFromStream(*input, atom);
+        result = atom_factory.CreateAtomFromStream(*input, atom);
         if (AP4_FAILED(result)) break;
         
         if (atom->GetType() == AP4_ATOM_TYPE_MOOF) {
@@ -345,7 +351,7 @@ main(int argc, char** argv)
                     if (Options.pattern_params[i] == 'I') {
                         p[i] = track_id;
                     } else if (Options.pattern_params[i] == 'N') {
-                        p[i] = NextFragmentIndex(track_id);
+                        p[i] = NextFragmentIndex(track_id)+Options.start_number;
                     }
                 }
                 switch (params_len) {

@@ -68,7 +68,7 @@ void
 AP4_GlobalOptions::SetBool(const char* name, bool value)
 {
     Entry* entry = GetEntry(name, true);
-    entry->m_BoolValue = value;
+    entry->m_Value = value?"true":"false";
 }
 
 /*----------------------------------------------------------------------
@@ -79,9 +79,33 @@ AP4_GlobalOptions::GetBool(const char* name)
 {
     Entry* entry = GetEntry(name, false);
     if (entry) {
-        return entry->m_BoolValue;
+        return entry->m_Value == "true";
     } else {
         return false;
+    }
+}
+
+/*----------------------------------------------------------------------
+|   AP4_GlobalOptions::SetString
++---------------------------------------------------------------------*/
+void
+AP4_GlobalOptions::SetString(const char* name, const char* value)
+{
+    Entry* entry = GetEntry(name, true);
+    entry->m_Value = value;
+}
+
+/*----------------------------------------------------------------------
+|   AP4_GlobalOptions::GetString
++---------------------------------------------------------------------*/
+const char*
+AP4_GlobalOptions::GetString(const char* name)
+{
+    Entry* entry = GetEntry(name, false);
+    if (entry) {
+        return entry->m_Value.GetChars();
+    } else {
+        return NULL;
     }
 }
 
@@ -270,7 +294,7 @@ AP4_NibbleHex(unsigned int nibble)
 AP4_Result
 AP4_ParseHex(const char* hex, unsigned char* bytes, unsigned int count)
 {
-    if (AP4_StringLength(hex) != 2*count) return AP4_ERROR_INVALID_PARAMETERS;
+    if (AP4_StringLength(hex) < 2*count) return AP4_ERROR_INVALID_PARAMETERS;
     for (unsigned int i=0; i<count; i++) {
         bytes[i] = (AP4_HexNibble(hex[2*i]) << 4) | (AP4_HexNibble(hex[2*i+1]));
     }
