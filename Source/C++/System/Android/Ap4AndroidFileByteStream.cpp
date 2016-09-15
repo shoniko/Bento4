@@ -1,8 +1,8 @@
 /*****************************************************************
 |
-|    AP4 - Stdc File Byte Stream implementation
+|    AP4 - Android File Byte Stream implementation
 |
-|    Copyright 2002-2008 Axiomatic Systems, LLC
+|    Copyright 2002-2016 Axiomatic Systems, LLC
 |
 |
 |    This file is part of Bento4/AP4 (MP4 Atom Processing Library).
@@ -29,48 +29,19 @@
 /*----------------------------------------------------------------------
 |   includes
 +---------------------------------------------------------------------*/
-#define _LARGEFILE_SOURCE
-#define _LARGEFILE_SOURCE64
-#define _FILE_OFFSET_BITS 64
-
 #include <stdio.h>
 #include <string.h>
-#if !defined(_WIN32_WCE)
 #include <errno.h>
 #include <sys/stat.h>
-#endif
+#include <unistd.h>
+#include <fcntl.h>
 
 #include "Ap4FileByteStream.h"
 
 /*----------------------------------------------------------------------
-|   compatibility wrappers
+|   AP4_AndroidFileByteStream
 +---------------------------------------------------------------------*/
-#if !defined(ENOENT)
-#define ENOENT 2
-#endif
-#if !defined(EACCES)
-#define EACCES 13
-#endif
-
-#if !defined(AP4_CONFIG_HAVE_FOPEN_S)
-static int fopen_s(FILE**      file,
-                   const char* filename,
-                   const char* mode)
-{
-    *file = fopen(filename, mode);
-#if defined(UNDER_CE)
-    if (*file == NULL) return ENOENT;
-#else
-    if (*file == NULL) return errno;
-#endif
-    return 0;
-}
-#endif // defined(AP4_CONFIG_HAVE_FOPEN_S
-
-/*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream
-+---------------------------------------------------------------------*/
-class AP4_StdcFileByteStream: public AP4_ByteStream
+class AP4_AndroidFileByteStream: public AP4_ByteStream
 {
 public:
     // class methods
@@ -80,11 +51,11 @@ public:
                              AP4_ByteStream*&         stream);
                       
     // methods
-    AP4_StdcFileByteStream(AP4_FileByteStream* delegator,
-                           FILE*               file, 
-                           AP4_LargeSize       size);
+    AP4_AndroidFileByteStream(AP4_FileByteStream* delegator,
+                              int                 fd,
+                              AP4_LargeSize       size);
     
-    ~AP4_StdcFileByteStream();
+    ~AP4_AndroidFileByteStream();
 
     // AP4_ByteStream methods
     AP4_Result ReadPartial(void*     buffer, 
@@ -106,19 +77,19 @@ private:
     // members
     AP4_ByteStream* m_Delegator;
     AP4_Cardinal    m_ReferenceCount;
-    FILE*           m_File;
+    int             m_FD;
     AP4_Position    m_Position;
     AP4_LargeSize   m_Size;
 };
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::Create
+|   AP4_AndroidFileByteStream::Create
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::Create(AP4_FileByteStream*      delegator,
-                               const char*              name, 
-                               AP4_FileByteStream::Mode mode, 
-                               AP4_ByteStream*&         stream)
+AP4_AndroidFileByteStream::Create(AP4_FileByteStream*      delegator,
+                                  const char*              name,
+                                  AP4_FileByteStream::Mode mode,
+                                  AP4_ByteStream*&         stream)
 {
     // default value
     stream = NULL;
@@ -127,37 +98,39 @@ AP4_StdcFileByteStream::Create(AP4_FileByteStream*      delegator,
     if (name == NULL) return AP4_ERROR_INVALID_PARAMETERS;
     
     // open the file
-    FILE* file = NULL;
+    int fd = 0;
     AP4_Position size = 0;
     if (!strcmp(name, "-stdin")) {
-        file = stdin;
+        fd = STDIN_FILENO;
     } else if (!strcmp(name, "-stdout")) {
-        file = stdout;
+        fd = STDOUT_FILENO;
     } else if (!strcmp(name, "-stderr")) {
-        file = stderr;
+        fd = STDERR_FILENO;
     } else {
-        int open_result;
+        int open_flags = 0;
+        int create_perm = 0;
         switch (mode) {
           case AP4_FileByteStream::STREAM_MODE_READ:
-            open_result = fopen_s(&file, name, "rb");
+            open_flags = O_RDONLY;
             break;
 
           case AP4_FileByteStream::STREAM_MODE_WRITE:
-            open_result = fopen_s(&file, name, "wb+");
+            open_flags = O_RDWR | O_CREAT | O_TRUNC;
             break;
 
           case AP4_FileByteStream::STREAM_MODE_READ_WRITE:
-              open_result = fopen_s(&file, name, "r+b");
-              break;                                  
+            open_flags = O_RDWR;
+            break;
 
           default:
             return AP4_ERROR_INVALID_PARAMETERS;
         }
     
-        if (open_result != 0) {
-            if (open_result == ENOENT) {
+        fd = open(name, open_flags, create_perm);
+        if (fd < 0) {
+            if (errno == ENOENT) {
                 return AP4_ERROR_NO_SUCH_FILE;
-            } else if (open_result == EACCES) {
+            } else if (errno == EACCES) {
                 return AP4_ERROR_PERMISSION_DENIED;
             } else {
                 return AP4_ERROR_CANNOT_OPEN_FILE;
@@ -165,55 +138,54 @@ AP4_StdcFileByteStream::Create(AP4_FileByteStream*      delegator,
         }
 
         // get the size
-        if (AP4_fseek(file, 0, SEEK_END) >= 0) {
-            size = AP4_ftell(file);
-            AP4_fseek(file, 0, SEEK_SET);
+        struct stat info;
+        if (stat(name, &info) == 0) {
+            size = info.st_size;
         }
-        
     }
-
-    stream = new AP4_StdcFileByteStream(delegator, file, size);
+        
+    stream = new AP4_AndroidFileByteStream(delegator, fd, size);
     return AP4_SUCCESS;
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::AP4_StdcFileByteStream
+|   AP4_AndroidFileByteStream::AP4_AndroidFileByteStream
 +---------------------------------------------------------------------*/
-AP4_StdcFileByteStream::AP4_StdcFileByteStream(AP4_FileByteStream* delegator,
-                                               FILE*               file,
-                                               AP4_LargeSize       size) :
+AP4_AndroidFileByteStream::AP4_AndroidFileByteStream(AP4_FileByteStream* delegator,
+                                                     int                 fd,
+                                                     AP4_LargeSize       size) :
     m_Delegator(delegator),
     m_ReferenceCount(1),
-    m_File(file),
+    m_FD(fd),
     m_Position(0),
     m_Size(size)
 {
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::~AP4_StdcFileByteStream
+|   AP4_AndroidFileByteStream::~AP4_AndroidFileByteStream
 +---------------------------------------------------------------------*/
-AP4_StdcFileByteStream::~AP4_StdcFileByteStream()
+AP4_AndroidFileByteStream::~AP4_AndroidFileByteStream()
 {
-    if (m_File && m_File != stdin && m_File != stdout && m_File != stderr) {
-        fclose(m_File);
+    if (m_FD && m_FD != STDERR_FILENO && m_FD != STDOUT_FILENO && m_FD != STDERR_FILENO) {
+        close(m_FD);
     }
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::AddReference
+|   AP4_AndroidFileByteStream::AddReference
 +---------------------------------------------------------------------*/
 void
-AP4_StdcFileByteStream::AddReference()
+AP4_AndroidFileByteStream::AddReference()
 {
     m_ReferenceCount++;
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::Release
+|   AP4_AndroidFileByteStream::Release
 +---------------------------------------------------------------------*/
 void
-AP4_StdcFileByteStream::Release()
+AP4_AndroidFileByteStream::Release()
 {
     if (--m_ReferenceCount == 0) {
         if (m_Delegator) {
@@ -225,65 +197,63 @@ AP4_StdcFileByteStream::Release()
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::ReadPartial
+|   AP4_AndroidFileByteStream::ReadPartial
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::ReadPartial(void*     buffer, 
-                                    AP4_Size  bytesToRead, 
-                                    AP4_Size& bytesRead)
+AP4_AndroidFileByteStream::ReadPartial(void*     buffer, 
+                                       AP4_Size  bytes_to_read,
+                                       AP4_Size& bytes_read)
 {
-    size_t nbRead;
+    ssize_t nb_read = read(m_FD, buffer, bytes_to_read);
 
-    nbRead = fread(buffer, 1, bytesToRead, m_File);
-
-    if (nbRead > 0) {
-        bytesRead = (AP4_Size)nbRead;
-        m_Position += nbRead;
+    if (nb_read > 0) {
+        bytes_read = (AP4_Size)nb_read;
+        m_Position += nb_read;
         return AP4_SUCCESS;
-    } else if (feof(m_File)) {
-        bytesRead = 0;
+    } else if (nb_read == 0) {
+        bytes_read = 0;
         return AP4_ERROR_EOS;
     } else {
-        bytesRead = 0;
+        bytes_read = 0;
         return AP4_ERROR_READ_FAILED;
     }
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::WritePartial
+|   AP4_AndroidFileByteStream::WritePartial
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::WritePartial(const void* buffer, 
-                                     AP4_Size    bytesToWrite, 
-                                     AP4_Size&   bytesWritten)
+AP4_AndroidFileByteStream::WritePartial(const void* buffer, 
+                                        AP4_Size    bytes_to_write,
+                                        AP4_Size&   bytes_written)
 {
-    size_t nbWritten;
-
-    if (bytesToWrite == 0) return AP4_SUCCESS;
-    nbWritten = fwrite(buffer, 1, bytesToWrite, m_File);
+    if (bytes_to_write == 0) {
+        bytes_written = 0;
+        return AP4_SUCCESS;
+    }
+    ssize_t nb_written = write(m_FD, buffer, bytes_to_write);
     
-    if (nbWritten > 0) {
-        bytesWritten = (AP4_Size)nbWritten;
-        m_Position += nbWritten;
+    if (nb_written > 0) {
+        bytes_written = (AP4_Size)nb_written;
+        m_Position += nb_written;
         return AP4_SUCCESS;
     } else {
-        bytesWritten = 0;
+        bytes_written = 0;
         return AP4_ERROR_WRITE_FAILED;
     }
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::Seek
+|   AP4_AndroidFileByteStream::Seek
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::Seek(AP4_Position position)
+AP4_AndroidFileByteStream::Seek(AP4_Position position)
 {
     // shortcut
     if (position == m_Position) return AP4_SUCCESS;
     
-    size_t result;
-    result = AP4_fseek(m_File, position, SEEK_SET);
-    if (result == 0) {
+    off64_t result = lseek64(m_FD, position, SEEK_SET);
+    if (result >= 0) {
         m_Position = position;
         return AP4_SUCCESS;
     } else {
@@ -292,33 +262,32 @@ AP4_StdcFileByteStream::Seek(AP4_Position position)
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::Tell
+|   AP4_AndroidFileByteStream::Tell
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::Tell(AP4_Position& position)
+AP4_AndroidFileByteStream::Tell(AP4_Position& position)
 {
     position = m_Position;
     return AP4_SUCCESS;
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::GetSize
+|   AP4_AndroidFileByteStream::GetSize
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::GetSize(AP4_LargeSize& size)
+AP4_AndroidFileByteStream::GetSize(AP4_LargeSize& size)
 {
     size = m_Size;
     return AP4_SUCCESS;
 }
 
 /*----------------------------------------------------------------------
-|   AP4_StdcFileByteStream::Flush
+|   AP4_AndroidFileByteStream::Flush
 +---------------------------------------------------------------------*/
 AP4_Result
-AP4_StdcFileByteStream::Flush()
+AP4_AndroidFileByteStream::Flush()
 {
-    int ret_val = fflush(m_File);
-    return (ret_val > 0) ? AP4_FAILURE: AP4_SUCCESS;
+    return AP4_SUCCESS;
 }
 
 /*----------------------------------------------------------------------
@@ -329,7 +298,7 @@ AP4_FileByteStream::Create(const char*              name,
                            AP4_FileByteStream::Mode mode,
                            AP4_ByteStream*&         stream)
 {
-    return AP4_StdcFileByteStream::Create(NULL, name, mode, stream);
+    return AP4_AndroidFileByteStream::Create(NULL, name, mode, stream);
 }
 
 #if !defined(AP4_CONFIG_NO_EXCEPTIONS)
@@ -340,7 +309,7 @@ AP4_FileByteStream::AP4_FileByteStream(const char*              name,
                                        AP4_FileByteStream::Mode mode)
 {
     AP4_ByteStream* stream = NULL;
-    AP4_Result result = AP4_StdcFileByteStream::Create(this, name, mode, stream);
+    AP4_Result result = AP4_AndroidFileByteStream::Create(this, name, mode, stream);
     if (AP4_FAILED(result)) throw AP4_Exception(result);
     
     m_Delegate = stream;

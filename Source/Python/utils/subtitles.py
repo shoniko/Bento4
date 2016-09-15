@@ -4,6 +4,7 @@ __copyright__ = 'Copyright 2011-2016 Axiomatic Systems, LLC.'
 
 import xml.etree.ElementTree as ET
 import os.path
+from mp4utils import LanguageCodeMap, LanguageNames
 
 TTML_XML_NAMESPACE = 'http://www.w3.org/ns/ttml'
 XML_NAMESPACE      = 'http://www.w3.org/XML/1998/namespace'
@@ -21,8 +22,15 @@ class SubtitlesFile:
         self.size = os.path.getsize(filename)
 
         self.language = media_source.spec.get('+language')
+        self.language_name = 'Unknown'
         if not self.language:
             self.language = 'unknown'
+
+        if len(self.language) == 3:
+            # convert to 2 char code
+            self.language = LanguageCodeMap.get(self.language, self.language)
+        language_name = LanguageNames.get(self.language, self.language_name)
+        self.language_name = media_source.spec.get('+language_name', language_name)
 
         if media_source.format == 'ttml':
             self.parse_ttml(options)
@@ -36,7 +44,7 @@ class SubtitlesFile:
         self.format    = 'ttml'
         self.mime_type = 'application/ttml+xml'
 
-        xml_tree= ET.parse(filename)
+        xml_tree= ET.parse(self.media_source.filename)
         xml_root = xml_tree.getroot()
 
         if xml_root.tag != '{'+TTML_XML_NAMESPACE+'}tt':

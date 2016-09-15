@@ -111,8 +111,12 @@
 
 /* Android */
 #if defined(ANDROID)
+#if !defined(AP4_CONFIG_NO_RTTI)
 #define AP4_CONFIG_NO_RTTI
+#endif
+#if !defined(AP4_CONFIG_NO_EXCEPTIONS)
 #define AP4_CONFIG_NO_EXCEPTIONS
+#endif
 #endif
 
 /* Emscripten */
